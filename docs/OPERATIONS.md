@@ -20,7 +20,9 @@ The demonstration branch selector shows separate branch records in a single data
 6. Configure real staff accounts, branch details, menu prices, recipes, supplier data, stock, opening balances, receipt text, tax, and service charge before trading. A fresh non-demo database has no demo sales but still contains starter catalog/branch templates requiring review.
 7. Validate receipts, tax calculations, rounding, refund permissions, stock movements, kitchen transitions, shift reconciliation, and backup recovery with the business owner and accountant.
 
-`npm start` does not automatically load `.env`. Configure the service environment, or use `node --env-file=.env --import tsx server/index.ts`. Protect `.env` with OS access controls and keep it out of source control. Once a database has been initialized, changing `POS_DEMO_MODE` does not reset it or rotate existing credentials.
+`npm start`, `npm run dev`, and `npm run start:cloud` load an optional local `.env` file. Configure the service environment for hosted deployments, or use `node --env-file=.env --import tsx server/index.ts` manually. Protect `.env` with OS access controls and keep it out of source control. Once a database has been initialized, changing `POS_DEMO_MODE` does not reset it or rotate existing credentials.
+
+For a Vercel frontend and persistent hosted API, follow the [Render connection guide](HOSTING-VERCEL-RENDER.md). Cloud-hosted transactions require internet. Keep the branch LAN topology above when trading must continue through internet outages.
 
 Do not expose the hub directly to the public internet. Restrict network access to trusted branch devices or a managed VPN. Automatic service startup and restart, disk-space monitoring, TLS renewal, OS updates, firewall rules, time synchronization, and recovery access need setup at the deployment site.
 

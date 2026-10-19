@@ -11,6 +11,12 @@ This repository contains a working local evaluation version of DEMO HOTEL. It is
 - SQLite transactions, durable command replay protection, stock movements, batch production, purchasing, suppliers, customers, and expenses.
 - Reports, CSV exports, verified local backups, and a Firebase Admin receiver with an outgoing event queue.
 - Backend-only environment configuration. Firebase origin and private credentials are excluded from the browser API and Git.
+- In-app Back across screens, dialogs, drawers and POS filters; per-device editable keyboard shortcuts and text-size controls.
+- Products, unique barcodes/SKUs, branch stock counts, and category/product creation from the register.
+- Shared held bills with version checks and atomic order consumption; customer credit ledgers and collections.
+- Sales history with filters/CSV, income/expense cash-flow CSV and print/PDF, and day-end reconciliation exports.
+- Per-device receipt widths, margins, offset and text size; honest hub printer discovery, individual LAN port checks, keyboard-scanner tests and optional WebHID access.
+- Render/Vercel deployment templates with persistent storage and same-origin cookie authentication guidance.
 
 ## Required before a live single-branch pilot
 
@@ -24,7 +30,7 @@ This repository contains a working local evaluation version of DEMO HOTEL. It is
 
 - Complete cross-branch transfer, receipt/discrepancy, and central command workflows across independent hubs.
 - Consolidated cloud-backed head-office application; the current branch selector evaluates locally stored sample branches.
-- Full double-entry accounting, financial statements, customer collections, supplier settlements, and closing-period controls.
+- Full double-entry accounting, accrual financial statements, supplier settlements, and closing-period controls. Customer credit collections and cash-flow statements are implemented.
 - Advanced purchasing approvals, costing corrections, stock-count sessions, batch expiry policies, modifiers, and combo mapping.
 - Controlled offline authorization leases, managed enrollment, automatic encrypted second-device backup, and standby promotion with receipt-series recovery.
 - Hardware print queues/cash drawer support, payment provider integrations, loyalty, attendance/payroll, catering, and online ordering as scoped.

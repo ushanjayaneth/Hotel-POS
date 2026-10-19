@@ -1,0 +1,32 @@
+# Example only. Configure the service manually using the hosting guide,
+# or copy this file to render.yaml after reviewing its settings and cost.
+# Enter INITIAL_ADMIN_PIN privately in Render; never commit its value.
+services:
+  - type: web
+    name: hotel-pos-backend
+    runtime: node
+    plan: 0.5c-512mb
+    numInstances: 1
+    branch: main
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    disk:
+      name: hotel-pos-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "24.21.0"
+      - key: NODE_ENV
+        value: production
+      - key: POS_DEMO_MODE
+        value: "false"
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: DATABASE_PATH
+        value: /var/data/hotel-pos.sqlite
+      - key: ALLOWED_ORIGINS
+        value: https://hotel-pos-kappa.vercel.app
+      - key: INITIAL_ADMIN_PIN
+        sync: false

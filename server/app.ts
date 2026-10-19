@@ -8,6 +8,9 @@ import type { User, Role, StaffMember, Branch, MenuItem, Order, InventoryItem, S
 import { Store, ApiError, requireThat, now, uid, sha } from './database';
 import { initialize } from './seed';
 import { authenticate, branchScope, permit, sessionUser, asUser, setPin, verifyPin } from './security';
+import { initializeBusiness, registerBusinessRoutes, creditBalance, draftSchema, receiptDefaults, validateReceiptSettings, validateMenuCodes, type HeldBillRecord, type CreditRecord, type ReceiptSettings } from './business';
+import { renderReceipt } from './receipt';
+import { listSystemPrinters, probeNetworkPrinter } from './peripherals';
 
 const command = z.string().min(8).max(160);
 const id = z.string().min(1).max(160);
@@ -22,14 +25,13 @@ const management: Role[] = ['owner','manager'];
 const stores: Role[] = ['owner','manager','storekeeper'];
 const productionRoles: Role[] = ['owner','manager','kitchen','storekeeper'];
 const roundQty = (x: number) => Math.round(x*10000)/10000;
-const html = (x: unknown) => String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
 interface AppOptions { databasePath?: string; seed?: boolean; logger?: boolean }
 
 export async function createApp(options: AppOptions = {}) {
   const app = Fastify({logger: options.logger ?? false, bodyLimit: 256 * 1024, trustProxy: false});
   const store = new Store(options.databasePath ?? process.env.DATABASE_PATH ?? 'data/demo-hotel.sqlite');
   const demo = options.seed ?? (process.env.POS_DEMO_MODE !== 'false' && process.env.NODE_ENV !== 'production');
-  try { initialize(store,demo); } catch(error) { store.close();throw error; }
+  try { initialize(store,demo);initializeBusiness(store); } catch(error) { store.close();throw error; }
   try{if(process.env.SYNC_ENDPOINT&&process.env.SYNC_TOKEN)store.queueBaseline(process.env.HUB_BRANCH_ID??'b1',process.env.HUB_ID??'local-hub',process.env.SYNC_ENDPOINT);}catch(error){store.close();throw error;}
   await app.register(cookie);
   app.decorate('store',store);
@@ -39,7 +41,7 @@ export async function createApp(options: AppOptions = {}) {
   const getUser = (request: FastifyRequest) => authenticate(store,request);
   const scoped = (user:User,branchId:string) => branchScope(store,user,branchId);
   const audit = (user:User,branchId:string,action:string,detail:string) => store.put<AuditEvent>('audit',{id:uid('audit'),branchId,action,actor:user.name,detail,createdAt:now()});
-  const settings = () => JSON.parse(store.meta('settings')!) as Settings;
+  const settings = () => ({...receiptDefaults,...JSON.parse(store.meta('settings')!)} as ReceiptSettings);
   const openShift = (branchId:string) => store.list<Shift>('shift',branchId).find(x=>x.status==='open');
   const publicOrder = (user:User,order:Order):Order => user.role==='kitchen'?{...order,customerId:null,subtotal:0,discount:0,tax:0,serviceCharge:0,total:0,paid:0,refunded:0,payments:[],lines:order.lines.map(line=>({...line,unitPrice:0,lineTotal:0}))}:user.role==='waiter'?{...order,payments:[]}:order;
   const ingredientStock = (branchId:string,key:string) => {
@@ -58,7 +60,7 @@ export async function createApp(options: AppOptions = {}) {
   const consume = (user:User,branchId:string,item:MenuItem,count:number,reason:string,production=false) => {
     if(!production && item.stockMode==='untracked') return;
     if(!production && item.stockMode==='prepared') {
-      const stock=store.list<InventoryItem>('inventory',branchId).find(x=>x.menuItemId===item.id && x.category==='prepared');
+      const stock=store.list<InventoryItem>('inventory',branchId).find(x=>x.menuItemId===item.id && ['prepared','resale'].includes(x.category));
       requireThat(stock,`No prepared stock is configured for ${item.name}.`,409);moveStock(user,stock,-count,'sale',reason);return;
     }
     const recipe=store.get<Recipe>('recipe',item.id);requireThat(recipe,`No recipe is configured for ${item.name}.`,409,'RECIPE_REQUIRED');
@@ -70,7 +72,7 @@ export async function createApp(options: AppOptions = {}) {
   const menuAvailable = (item:MenuItem,branchId:string) => {
     if(!item.available)return false;
     if(item.stockMode==='untracked')return true;
-    if(item.stockMode==='prepared')return store.list<InventoryItem>('inventory',branchId).some(x=>x.menuItemId===item.id&&x.category==='prepared'&&x.quantity>=1);
+    if(item.stockMode==='prepared')return store.list<InventoryItem>('inventory',branchId).some(x=>x.menuItemId===item.id&&['prepared','resale'].includes(x.category)&&x.quantity>=1);
     const recipe=store.get<Recipe>('recipe',item.id);
     return Boolean(recipe?.ingredients.length&&recipe.ingredients.every(line=>(ingredientStock(branchId,line.key)?.quantity??0)>=line.quantity));
   };
@@ -153,24 +155,39 @@ export async function createApp(options: AppOptions = {}) {
     return {user:asUser(found)};
   });
   app.post('/api/logout',async(request,reply)=>{if(request.cookies.demo_hotel_session)store.db.prepare('DELETE FROM sessions WHERE token_hash=?').run(sha(request.cookies.demo_hotel_session));reply.clearCookie('demo_hotel_session',{path:'/'});return {ok:true};});
+  registerBusinessRoutes(app,{store,getUser,scoped,audit,openShift});
+  app.get('/api/devices/printers',async request=>{const user=getUser(request);permit(user,['owner','manager','cashier']);return listSystemPrinters();});
+  app.post('/api/devices/printer-check',async request=>{const user=getUser(request);permit(user,['owner','manager','cashier']);const body=z.object({host:z.string().trim().min(1).max(253),port:z.number().int().min(1).max(65535).default(9100)}).parse(request.body);return probeNetworkPrinter(body.host,body.port);});
   app.get('/api/bootstrap',async request=>{
     const user=getUser(request);const query=z.object({branchId:id.optional()}).parse(request.query);const branchId=scoped(user,query.branchId??user.branchId??'b1');
     const isFinance=finance.includes(user.role);const isManagement=management.includes(user.role);const isStore=stores.includes(user.role)||productionRoles.includes(user.role)||user.role==='accountant';
     const maySeeCosts=isManagement||['storekeeper','accountant'].includes(user.role);
-    const snapshot:Snapshot={user,branches:store.list<Branch>('branch').filter(x=>user.role==='owner'||x.id===user.branchId),branch:store.get<Branch>('branch',branchId)!,categories:store.list<Category>('category'),menu:store.list<MenuItem>('menu').map(x=>maySeeCosts?x:{...x,cost:0}),recipes:isStore?store.list<Recipe>('recipe'):[],tables:store.list<DiningTable>('table',branchId),orders:sales.includes(user.role)||user.role==='kitchen'||isFinance?store.list<Order>('order',branchId).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)):[],inventory:isStore?store.list<InventoryItem>('inventory',branchId).map(x=>maySeeCosts?x:{...x,unitCost:0}):[],stockMovements:isStore?store.list<StockMovement>('movement',branchId).slice(-500).reverse():[],production:productionRoles.includes(user.role)?store.list<ProductionBatch>('production',branchId).reverse().map(x=>maySeeCosts?x:{...x,cost:0}):[],suppliers:stores.includes(user.role)||user.role==='accountant'?store.list<Supplier>('supplier'):[],purchases:stores.includes(user.role)||user.role==='accountant'?store.list<Purchase>('purchase',branchId).reverse():[],customers:sales.includes(user.role)||isFinance?store.list<Customer>('customer'):[],staff:isManagement?store.list<StaffMember>('staff').filter(x=>user.role==='owner'||x.branchId===branchId):[],expenses:isFinance?store.list<Expense>('expense',branchId).reverse():[],shifts:isFinance?store.list<Shift>('shift',branchId).reverse():[],audit:isManagement?store.list<AuditEvent>('audit',branchId).slice(-300).reverse():[],sync:syncState(user.role==='owner'?undefined:branchId),settings:settings(),serverTime:now()};
+    const snapshot:Snapshot={
+      user,branches:store.list<Branch>('branch').filter(x=>user.role==='owner'||x.id===user.branchId),branch:store.get<Branch>('branch',branchId)!,
+      categories:store.list<Category>('category'),menu:store.list<MenuItem>('menu').map(x=>maySeeCosts?x:{...x,cost:0}),recipes:isStore?store.list<Recipe>('recipe'):[],
+      tables:store.list<DiningTable>('table',branchId),orders:sales.includes(user.role)||user.role==='kitchen'||isFinance?store.list<Order>('order',branchId).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)):[],
+      heldBills:sales.includes(user.role)?store.list<HeldBillRecord>('held',branchId).filter(x=>x.status==='held').reverse():[],creditEntries:isFinance?store.list<CreditRecord>('credit',branchId).reverse():[],
+      inventory:isStore?store.list<InventoryItem>('inventory',branchId).map(x=>maySeeCosts?x:{...x,unitCost:0}):[],stockMovements:isStore?store.list<StockMovement>('movement',branchId).slice(-500).reverse():[],
+      production:productionRoles.includes(user.role)?store.list<ProductionBatch>('production',branchId).reverse().map(x=>maySeeCosts?x:{...x,cost:0}):[],suppliers:stores.includes(user.role)||user.role==='accountant'?store.list<Supplier>('supplier'):[],
+      purchases:stores.includes(user.role)||user.role==='accountant'?store.list<Purchase>('purchase',branchId).reverse():[],customers:sales.includes(user.role)||isFinance?store.list<Customer>('customer'):[],
+      staff:isManagement?store.list<StaffMember>('staff').filter(x=>user.role==='owner'||x.branchId===branchId):[],expenses:isFinance?store.list<Expense>('expense',branchId).reverse():[],shifts:isFinance?store.list<Shift>('shift',branchId).reverse():[],
+      audit:isManagement?store.list<AuditEvent>('audit',branchId).slice(-300).reverse():[],sync:syncState(user.role==='owner'?undefined:branchId),settings:settings(),serverTime:now(),
+    };
     // The register sees live sellability even when its role cannot inspect costs or stores.
     snapshot.menu=snapshot.menu.map(item=>({...item,enabled:item.available,available:menuAvailable(item,branchId)}));
     if(user.role==='accountant')snapshot.production=store.list<ProductionBatch>('production',branchId).reverse();
     snapshot.orders=snapshot.orders.map(order=>publicOrder(user,order));
     if(user.role==='waiter')snapshot.customers=snapshot.customers.map(customer=>({...customer,spent:0,balance:0,points:0}));
     if(user.role!=='owner')snapshot.suppliers=snapshot.suppliers.map(supplier=>({...supplier,balance:store.list<Purchase>('purchase',branchId).filter(x=>x.supplierId===supplier.id).reduce((sum,x)=>sum+x.total,0)}));
+    if(isFinance)snapshot.customers=snapshot.customers.map(customer=>({...customer,balance:creditBalance(store,customer.id,branchId)}));
     return snapshot;
   });
   app.post('/api/orders',async request=>{
     const user=getUser(request);permit(user,sales);
-    const body=z.object({commandId:command,branchId:id,type:z.enum(['dine-in','takeaway','delivery']),tableId:id.nullish(),customerId:id.nullish(),note:z.string().max(1000).optional(),discount:money.default(0),lines:z.array(z.object({menuItemId:id,quantity:z.number().int().positive().max(1000),note:z.string().max(300).default('')})).min(1).max(100)}).parse(request.body);
+    const body=draftSchema.extend({heldBillId:id.optional(),expectedHeldUpdatedAt:z.iso.datetime().optional()}).parse(request.body);
     scoped(user,body.branchId);if(body.discount>0)permit(user,management);
     return store.command(body.commandId,user.id,'order.create',body.branchId,body,()=>{
+      if(body.heldBillId){const held=store.get<HeldBillRecord>('held',body.heldBillId);requireThat(held&&held.branchId===body.branchId,'Held bill not found in this branch.',404);requireThat(held.status==='held','This held bill was already resumed or discarded.',409,'HELD_BILL_CLOSED');requireThat(body.expectedHeldUpdatedAt===held.updatedAt,'This held bill changed on another device. Reload it before confirming the order.',409,'HELD_BILL_CONFLICT');}
       requireThat(body.type==='dine-in'||!body.tableId,'A table can only be assigned to a dine-in order.');
       if(body.tableId){const table=store.get<DiningTable>('table',body.tableId);requireThat(table&&table.branchId===body.branchId,'Table not found in this branch.',404);requireThat(table.status==='available','This table already has an active order.',409,'TABLE_OCCUPIED');}
       if(body.customerId)requireThat(store.get('customer',body.customerId),'Customer not found.',404);
@@ -187,6 +204,7 @@ export async function createApp(options: AppOptions = {}) {
       const order:Order={id:orderId,number,branchId:body.branchId,type:body.type,tableId:body.tableId??null,customerId:body.customerId??null,status:'new',paymentStatus:'unpaid',subtotal,discount:body.discount,tax,serviceCharge,total:taxable+serviceCharge+tax,paid:0,refunded:0,note:body.note??'',createdAt:now(),updatedAt:now(),createdBy:user.id,version:1,lines,payments:[]};
       requireThat(Number.isSafeInteger(order.total)&&order.total<=1_000_000_000,'Order total exceeds the allowed limit.');
       store.put('order',order);
+      if(body.heldBillId){const held=store.get<HeldBillRecord>('held',body.heldBillId)!;store.put('held',{...held,status:'resumed' as const,resumedOrderId:order.id,updatedAt:now()});}
       if(body.tableId){const table=store.get<DiningTable>('table',body.tableId)!;store.put('table',{...table,status:'occupied' as const,orderId});}
       audit(user,body.branchId,'order.created',`${number} · ${lines.length} items`);return {ok:true,order};
     });
@@ -227,6 +245,7 @@ export async function createApp(options: AppOptions = {}) {
       if(paid===order.total&&order.type!=='dine-in'&&order.status==='served')updated.status='completed';
       store.put('order',updated);
       if(body.method==='cash')store.put('shift',{...shift,expectedCash:shift.expectedCash+body.amount});
+      if(body.method==='credit'&&order.customerId)store.put<CreditRecord>('credit',{id:`credit-${payment.id}`,branchId:order.branchId,customerId:order.customerId,orderId:order.id,type:'sale',amount:body.amount,method:'credit',reference:payment.reference,note:`Credit sale ${order.number}`,createdAt:payment.createdAt,createdBy:user.id});
       if(order.customerId) {const customer=store.get<Customer>('customer',order.customerId)!;store.put('customer',{...customer,spent:customer.spent+body.amount,visits:customer.visits+(paid===order.total?1:0),balance:customer.balance+(body.method==='credit'?body.amount:0),points:customer.points+Math.floor(body.amount/10000)});}
       if(updated.status==='completed')releaseTable(updated);
       audit(user,order.branchId,'payment.accepted',`${order.number} · ${body.method} · ${body.amount}`);return {ok:true,order:updated,payment};
@@ -241,8 +260,10 @@ export async function createApp(options: AppOptions = {}) {
       const refundMethod=body.method??order.payments[0]?.method??'cash';const shift=openShift(order.branchId);requireThat(shift,'Open a shift before processing a refund.',409,'SHIFT_REQUIRED');
       const prior=store.list<{id:string;branchId:string;orderId:string;amount:number;method:string}>('refund',order.branchId).filter(x=>x.orderId===order.id&&x.method===refundMethod).reduce((sum,x)=>sum+x.amount,0);
       const paidMethod=order.payments.filter(x=>x.method===refundMethod).reduce((sum,x)=>sum+x.amount,0);requireThat(body.amount<=paidMethod-prior,'Refund exceeds the payment received by this method.');
+      if(refundMethod==='credit')requireThat(order.customerId&&body.amount<=creditBalance(store,order.customerId,order.branchId),'This credit balance has already been collected; reconcile the actual payment before refunding.',409,'CREDIT_ALREADY_COLLECTED');
       if(refundMethod==='cash'){requireThat(shift.expectedCash>=body.amount,'The cash drawer does not contain enough recorded cash.');store.put('shift',{...shift,expectedCash:shift.expectedCash-body.amount});}
-      store.put('refund',{id:uid('refund'),branchId:order.branchId,orderId:order.id,amount:body.amount,method:refundMethod,reason:body.reason,createdAt:now(),createdBy:user.id});
+      const refundId=uid('refund');const refundedAt=now();store.put('refund',{id:refundId,branchId:order.branchId,orderId:order.id,amount:body.amount,method:refundMethod,reason:body.reason,createdAt:refundedAt,createdBy:user.id});
+      if(refundMethod==='credit'&&order.customerId)store.put<CreditRecord>('credit',{id:`credit-${refundId}`,branchId:order.branchId,customerId:order.customerId,orderId:order.id,type:'refund',amount:body.amount,method:'credit',reference:'',note:body.reason,createdAt:refundedAt,createdBy:user.id});
       const refunded=order.refunded+body.amount;const updated:Order={...order,refunded,paymentStatus:refunded===order.paid?'refunded':'partial',updatedAt:now(),version:order.version+1};store.put('order',updated);
       if(order.customerId){const c=store.get<Customer>('customer',order.customerId)!;store.put('customer',{...c,spent:Math.max(0,c.spent-body.amount),balance:Math.max(0,c.balance-(refundMethod==='credit'?body.amount:0)),points:Math.max(0,c.points-Math.floor(body.amount/10000))});}
       audit(user,order.branchId,'payment.refunded',`${order.number} · ${body.amount} · ${body.reason}`);return {ok:true,order:updated};
@@ -256,10 +277,19 @@ export async function createApp(options: AppOptions = {}) {
     const user=getUser(request);permit(user,stores);const body=z.object({commandId:command.optional(),branchId:id,name:z.string().trim().min(2).max(120),nameSi:z.string().max(160).default(''),category:z.enum(['ingredient','prepared','packaging','resale']),unit:z.string().trim().min(1).max(30),quantity:z.number().finite().min(0).max(100000).default(0),minimum:z.number().finite().min(0).max(100000).default(0),unitCost:money,supplierId:id.nullish(),menuItemId:id.nullish()}).parse(request.body);scoped(user,body.branchId);
     return store.command(body.commandId??uid('command'),user.id,'inventory.create',body.branchId,body,()=>{
       if(body.supplierId)requireThat(store.get('supplier',body.supplierId),'Supplier not found.',404);
-      if(body.menuItemId){requireThat(store.get('menu',body.menuItemId),'Menu item not found.',404);if(body.category==='prepared')requireThat(!store.list<InventoryItem>('inventory',body.branchId).some(x=>x.category==='prepared'&&x.menuItemId===body.menuItemId),'Prepared stock already exists for this menu item.',409);}
+      if(body.menuItemId){requireThat(store.get('menu',body.menuItemId),'Menu item not found.',404);if(['prepared','resale'].includes(body.category))requireThat(!store.list<InventoryItem>('inventory',body.branchId).some(x=>['prepared','resale'].includes(x.category)&&x.menuItemId===body.menuItemId),'Linked sale stock already exists for this menu item.',409);}
       const canonical=body.name.normalize('NFKD').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,60)||uid('item');
       requireThat(!store.get('inventory',`${body.branchId}-${canonical}`),'A stock item with this name already exists in this branch.',409);
       const item:InventoryItem={id:`${body.branchId}-${canonical}`,branchId:body.branchId,name:body.name,nameSi:body.nameSi||body.name,category:body.category,unit:body.unit,quantity:0,minimum:body.minimum,unitCost:body.unitCost,supplierId:body.supplierId??null,menuItemId:body.menuItemId??null,updatedAt:now()};store.put('inventory',item);if(body.quantity)moveStock(user,item,body.quantity,'opening','Opening stock');audit(user,body.branchId,'stock.item_created',body.name);return {ok:true,item:store.get('inventory',item.id)};
+    });
+  });
+  app.patch('/api/inventory/:id',async request=>{
+    const user=getUser(request);permit(user,stores);const params=z.object({id}).parse(request.params);const body=z.object({commandId:command,branchId:id,quantity:z.number().finite().min(0).max(100000).optional(),minimum:z.number().finite().min(0).max(100000).optional(),unitCost:money.optional(),reason:z.string().trim().min(3).max(500).default('Product stock update'),expectedQuantity:z.number().finite().min(0).optional()}).parse(request.body);scoped(user,body.branchId);
+    return store.command(body.commandId,user.id,`inventory.update:${params.id}`,body.branchId,body,()=>{
+      const item=store.get<InventoryItem>('inventory',params.id);requireThat(item&&item.branchId===body.branchId,'Stock item not found in this branch.',404);
+      if(body.expectedQuantity!==undefined)requireThat(item.quantity===body.expectedQuantity,'This stock quantity changed while you were editing. Refresh before saving.',409,'STOCK_VERSION_CONFLICT');
+      if(body.quantity!==undefined&&body.quantity!==item.quantity)moveStock(user,item,body.quantity-item.quantity,'adjustment',body.reason);
+      const updated=store.get<InventoryItem>('inventory',item.id)!;store.put('inventory',{...updated,minimum:body.minimum??updated.minimum,unitCost:body.unitCost??updated.unitCost,updatedAt:now()});audit(user,body.branchId,'stock.item_updated',`${item.name} · ${body.reason}`);return {ok:true,item:store.get('inventory',item.id)};
     });
   });
   app.post('/api/production',async request=>{
@@ -294,14 +324,14 @@ export async function createApp(options: AppOptions = {}) {
       const customer:Customer={id:uid('customer'),name:body.name,phone:body.phone,email:body.email,visits:0,spent:0,balance:0,points:0,createdAt:now()};store.put('customer',customer);audit(user,branchId,'customer.created',body.name);return {ok:true,customer};
     });
   });
-  const menuSchema=z.object({name:z.string().trim().min(2).max(120),nameSi:z.string().max(160).default(''),description:z.string().max(500).default(''),categoryId:id,price:amount,cost:money.default(0),image:z.string().max(500).refine(x=>x.startsWith('/images/')||x.startsWith('https://'),'Use a local /images/ path or HTTPS image URL.'),available:z.boolean().default(true),stockMode:z.enum(['prepared','recipe','untracked']),badge:z.string().max(30).optional(),preparationMinutes:z.number().int().min(0).max(180).default(10)});
+  const menuSchema=z.object({name:z.string().trim().min(2).max(120),nameSi:z.string().max(160).default(''),description:z.string().max(500).default(''),categoryId:id,price:amount,cost:money.default(0),image:z.string().max(500).refine(x=>x.startsWith('/images/')||x.startsWith('https://'),'Use a local /images/ path or HTTPS image URL.'),available:z.boolean().default(true),stockMode:z.enum(['prepared','recipe','untracked']),badge:z.string().max(30).optional(),preparationMinutes:z.number().int().min(0).max(180).default(10),barcode:z.string().trim().max(80).regex(/^[A-Za-z0-9 ._\/-]*$/).optional(),sku:z.string().trim().max(80).regex(/^[A-Za-z0-9 ._\/-]*$/).transform(x=>x.toUpperCase()).optional(),reorderLevel:z.number().finite().min(0).max(100000).optional()});
   app.post('/api/menu',async request=>{
-    const user=getUser(request);permit(user,['owner']);const body=menuSchema.extend({commandId:command.optional()}).parse(request.body);
-    return store.command(body.commandId??uid('command'),user.id,'menu.create','b1',body,()=>{requireThat(store.get('category',body.categoryId),'Category not found.',404);const {commandId,...data}=body;const item:MenuItem={...data,id:uid('menu'),nameSi:data.nameSi||data.name};store.put('menu',item);audit(user,'b1','menu.created',item.name);return {ok:true,item};});
+    const user=getUser(request);permit(user,management);const body=menuSchema.extend({commandId:command.optional()}).parse(request.body);const branchId=user.branchId??'b1';
+    return store.command(body.commandId??uid('command'),user.id,'menu.create',branchId,body,()=>{requireThat(store.get('category',body.categoryId),'Category not found.',404);validateMenuCodes(store,body);const {commandId,...data}=body;const item:MenuItem={...data,id:uid('menu'),nameSi:data.nameSi||data.name};store.put('menu',item);audit(user,branchId,'menu.created',item.name);return {ok:true,item};});
   });
   app.patch('/api/menu/:id',async request=>{
-    const user=getUser(request);permit(user,['owner']);const params=z.object({id}).parse(request.params);const body=menuSchema.partial().extend({commandId:command.optional()}).parse(request.body);
-    return store.command(body.commandId??uid('command'),user.id,`menu.update:${params.id}`,'b1',body,()=>{const item=store.get<MenuItem>('menu',params.id);requireThat(item,'Menu item not found.',404);if(body.categoryId)requireThat(store.get('category',body.categoryId),'Category not found.',404);const {commandId,...data}=body;const updated={...item,...data};store.put('menu',updated);audit(user,'b1','menu.updated',updated.name);return {ok:true,item:updated};});
+    const user=getUser(request);permit(user,management);const params=z.object({id}).parse(request.params);const body=menuSchema.partial().extend({commandId:command.optional()}).parse(request.body);const branchId=user.branchId??'b1';
+    return store.command(body.commandId??uid('command'),user.id,`menu.update:${params.id}`,branchId,body,()=>{const item=store.get<MenuItem>('menu',params.id);requireThat(item,'Menu item not found.',404);if(body.categoryId)requireThat(store.get('category',body.categoryId),'Category not found.',404);validateMenuCodes(store,body,item.id);const {commandId,...data}=body;const explicit=Object.fromEntries(Object.entries(data).filter(([key])=>Object.hasOwn(request.body as object,key)));const updated={...item,...explicit};store.put('menu',updated);audit(user,branchId,'menu.updated',updated.name);return {ok:true,item:updated};});
   });
   app.put('/api/menu/:id/recipe',async request=>{
     const user=getUser(request);permit(user,['owner']);const params=z.object({id}).parse(request.params);const body=z.object({commandId:command,ingredients:z.array(z.object({key:z.string().regex(/^[a-zA-Z0-9_-]+$/),quantity})).min(1).max(50)}).parse(request.body);
@@ -343,15 +373,15 @@ export async function createApp(options: AppOptions = {}) {
     return store.command(body.commandId,user.id,`shift.close:${shift.id}`,shift.branchId,body,()=>{const current=store.get<Shift>('shift',shift.id)!;requireThat(current.status==='open','This shift is already closed.',409);const updated:Shift={...current,status:'closed',closedAt:now(),countedCash:body.countedCash,variance:body.countedCash-current.expectedCash};store.put('shift',updated);audit(user,shift.branchId,'shift.closed',`Cash variance ${updated.variance}`);return {ok:true,shift:updated};});
   });
   app.put('/api/settings',async request=>{
-    const user=getUser(request);permit(user,['owner']);const body=z.object({commandId:command.optional(),businessName:z.string().trim().min(2).max(100).optional(),tagline:z.string().max(150).optional(),currency:z.literal('LKR').optional(),taxRate:z.number().min(0).max(100).optional(),serviceChargeRate:z.number().min(0).max(100).optional(),receiptFooter:z.string().max(500).optional(),lowStockAlerts:z.boolean().optional(),autoPrint:z.boolean().optional(),language:z.enum(['si','en']).optional()}).parse(request.body);
-    return store.command(body.commandId??uid('command'),user.id,'settings.update','b1',body,()=>{const {commandId,...changes}=body;const updated={...settings(),...changes};store.setMeta('settings',JSON.stringify(updated));store.changes?.push({kind:'settings',id:'settings',branchId:null,value:updated});audit(user,'b1','settings.updated',Object.keys(changes).join(', '));return {ok:true,settings:updated};});
+    const user=getUser(request);permit(user,['owner']);const body=z.object({commandId:command.optional(),businessName:z.string().trim().min(2).max(100).optional(),tagline:z.string().max(150).optional(),currency:z.literal('LKR').optional(),taxRate:z.number().min(0).max(100).optional(),serviceChargeRate:z.number().min(0).max(100).optional(),receiptFooter:z.string().max(500).optional(),lowStockAlerts:z.boolean().optional(),autoPrint:z.boolean().optional(),language:z.enum(['si','en']).optional(),receiptPaperWidthMm:z.number().min(40).max(120).optional(),receiptContentWidthMm:z.number().min(20).max(120).optional(),receiptMarginMm:z.number().min(0).max(15).optional(),receiptOffsetMm:z.number().min(-30).max(30).optional(),receiptFontSize:z.number().min(6).max(18).optional()}).parse(request.body);
+    return store.command(body.commandId??uid('command'),user.id,'settings.update','b1',body,()=>{const {commandId,...changes}=body;const updated={...settings(),...changes};validateReceiptSettings(updated);store.setMeta('settings',JSON.stringify(updated));store.changes?.push({kind:'settings',id:'settings',branchId:null,value:updated});audit(user,'b1','settings.updated',Object.keys(changes).join(', '));return {ok:true,settings:updated};});
   });
   app.post('/api/backups',async request=>{const user=getUser(request);permit(user,['owner']);const result=await store.backup();audit(user,'b1','backup.created',result.filename);return {filename:result.filename,checksum:result.checksum};});
   app.get('/api/backups/:filename',async(request,reply)=>{const user=getUser(request);permit(user,['owner']);const params=z.object({filename:z.string()}).parse(request.params);const path=store.backupPath(params.filename);reply.header('Content-Type','application/vnd.sqlite3').header('Content-Disposition',`attachment; filename="${params.filename}"`);return reply.send(createReadStream(path));});
   app.post('/api/sync',async request=>{const user=getUser(request);permit(user,management);await sync(true);return {ok:true,sync:syncState(user.role==='owner'?undefined:user.branchId!)};});
   app.get('/api/orders/:id/receipt',async(request,reply)=>{
-    const user=getUser(request);permit(user,finance);const params=z.object({id}).parse(request.params);const order=getOrder(user,params.id);const branch=store.get<Branch>('branch',order.branchId)!;const cfg=settings();const format=(n:number)=>(n/100).toLocaleString('en-LK',{minimumFractionDigits:2,maximumFractionDigits:2});
-    reply.type('text/html; charset=utf-8');return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${html(order.number)} · Receipt</title><style>body{font:13px ui-monospace,monospace;color:#111;background:#fff;max-width:300px;margin:30px auto;padding:12px}h1{font-size:20px;text-align:center;margin:0 0 8px}p{text-align:center;line-height:1.5}table{width:100%;border-collapse:collapse}td{padding:5px 0;vertical-align:top}td:last-child{text-align:right;white-space:nowrap}hr{border:0;border-top:1px dashed #999;margin:12px 0}.total{font-size:17px;font-weight:700}button{width:100%;padding:12px;margin:20px 0;border:0;background:#111;color:#fff;cursor:pointer}@media print{body{margin:0;padding:0}button{display:none}@page{size:80mm auto;margin:5mm}}</style></head><body><h1>${html(cfg.businessName)}</h1><p>${html(branch.name)}<br>${html(branch.address)}<br>${html(branch.phone)}</p><hr><div>Receipt ${html(order.number)}</div><div>${html(new Date(order.createdAt).toLocaleString('en-LK',{timeZone:'Asia/Colombo'}))}</div><div>${html(order.type)}${order.tableId?' · '+html(store.get<DiningTable>('table',order.tableId)?.name):''}</div>${store.meta('demo')==='true'?'<p><strong>DEMO — SAMPLE DATA</strong></p>':''}<hr><table>${order.lines.map(x=>`<tr><td>${x.quantity} × ${html(x.name)}<br><small>${format(x.unitPrice)} each</small></td><td>${format(x.lineTotal)}</td></tr>`).join('')}</table><hr><table><tr><td>Subtotal</td><td>${format(order.subtotal)}</td></tr>${order.discount?`<tr><td>Discount</td><td>−${format(order.discount)}</td></tr>`:''}<tr><td>Service charge</td><td>${format(order.serviceCharge)}</td></tr><tr><td>Tax</td><td>${format(order.tax)}</td></tr><tr class="total"><td>Total ${html(cfg.currency)}</td><td>${format(order.total)}</td></tr>${order.payments.map(x=>`<tr><td>Paid · ${html(x.method)}</td><td>${format(x.amount)}</td></tr>${x.change?`<tr><td>Change</td><td>${format(x.change)}</td></tr>`:''}`).join('')}${order.refunded?`<tr><td>Refunded</td><td>${format(order.refunded)}</td></tr>`:''}<tr><td>Balance</td><td>${format(Math.max(0,order.total-order.paid))}</td></tr></table><hr><p>${html(cfg.receiptFooter)}</p><button onclick="window.print()">Print receipt</button></body></html>`;
+    const user=getUser(request);permit(user,finance);const params=z.object({id}).parse(request.params);const order=getOrder(user,params.id);const branch=store.get<Branch>('branch',order.branchId)!;const cfg=settings();
+    reply.type('text/html; charset=utf-8');return renderReceipt(order,branch,cfg,{tableName:order.tableId?store.get<DiningTable>('table',order.tableId)?.name:undefined,demo:store.meta('demo')==='true'});
   });
   return app;
 }

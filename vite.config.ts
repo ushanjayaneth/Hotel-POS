@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig({
+  css:{postcss:{plugins:[{postcssPlugin:'workspace-font-scale',Declaration(declaration:{prop:string;value:string}){if(declaration.prop==='font-size'&&/^\d+(?:\.\d+)?px$/.test(declaration.value))declaration.value=`calc(${declaration.value} * var(--font-scale, 1))`;}}]}},
   plugins: [react(), VitePWA({
     registerType: 'prompt',
     includeAssets: ['icon.svg', 'images/*.jpg'],

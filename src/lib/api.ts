@@ -7,6 +7,9 @@ export async function api<T>(path: string, body?: unknown, method?: string): Pro
   try {
     response = await fetch(url, {method:method ?? (body === undefined ? 'GET':'POST'),credentials:'same-origin',headers:body===undefined?undefined:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(15000)});
   } catch { throw new ApiError('The branch hub is unavailable. Your draft is saved on this device.'); }
+  if (response.status === 404 && !response.headers.get('content-type')?.includes('application/json')) {
+    throw new ApiError('The POS backend is not connected to this website. Connect the branch hub to enable sign-in.', 404);
+  }
   const result = await response.json().catch(()=>({message:'The server returned an invalid response.'}));
   if (!response.ok) throw new ApiError(result.message ?? result.error ?? 'This action could not be completed.',response.status);
   return result as T;

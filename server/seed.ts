@@ -1,6 +1,7 @@
 import type { Branch, Category, MenuItem, StaffMember, InventoryItem, DiningTable, Order, Settings, Supplier, Customer, Shift, ProductionBatch, Purchase, StockMovement, Recipe } from '../shared/types';
 import { Store, now } from './database';
 import { setPin } from './security';
+import { receiptDefaults } from './business';
 
 export function initialize(store: Store, demo: boolean) {
   if (store.meta('initialized')) return;
@@ -12,7 +13,7 @@ export function initialize(store: Store, demo: boolean) {
       { id: 'b3', name: 'Galle', nameSi: 'ගාල්ල', code: 'GLE', address: '8, Church Street, Galle', phone: '+94 91 234 5678' },
     ];
     branches.slice(0, demo ? 3 : 1).forEach(x => store.put('branch', x));
-    const settings: Settings = { businessName: 'DEMO HOTEL', tagline: 'Restaurant & kitchen', currency: 'LKR', taxRate: 0, serviceChargeRate: 0, receiptFooter: 'Thank you for dining with us. See you again!', lowStockAlerts: true, autoPrint: false, language: 'en' };
+    const settings: Settings = { businessName: 'DEMO HOTEL', tagline: 'Restaurant & kitchen', currency: 'LKR', taxRate: 0, serviceChargeRate: 0, receiptFooter: 'Thank you for dining with us. See you again!', lowStockAlerts: true, autoPrint: false, language: 'en',...receiptDefaults };
     store.setMeta('settings', JSON.stringify(settings));
     const categories: Category[] = [
       { id: 'rice', name: 'Rice & curry', nameSi: 'බත් සහ ව්‍යංජන', icon: 'rice' },

@@ -80,7 +80,7 @@ export class Store {
     });
   }
   queueBaseline(branchId:string,hubId:string,endpoint:string) {
-    const marker=`cloudBaseline:${sha(`${hubId}:${branchId}:${endpoint}`)}`;
+    const marker=`cloudBaseline:v2:${sha(`${hubId}:${branchId}:${endpoint}`)}`;
     if(this.meta(marker))return;
     requireThat(this.get('branch',branchId),'The configured HUB_BRANCH_ID does not exist.',500);
     const globals=new Set(['customer','supplier','staff','menu','recipe','category']);

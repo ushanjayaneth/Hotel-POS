@@ -53,8 +53,22 @@ For the first non-demo run, use a **new** `DATABASE_PATH`, `POS_DEMO_MODE=false`
 - Ingredients and prepared stock, recipe consumption, production batches, purchase receiving, suppliers, customers, and staff roles.
 - Branch views, expenses, reports, audit history, verified local database backups, and a durable outgoing sync queue.
 - Responsive layouts, installable PWA assets, device-local drafts, and saved workspace data for hub outages.
+- Step-by-step in-app Back navigation, editable keyboard shortcuts, and a device-local text-size slider.
+- Products with prices, barcodes/SKUs and branch stock; category and product creation directly from Point of sale.
+- Shared held bills with stale-edit protection, customer credit and collections, searchable sales history, income/expense statements and day-end CSV downloads.
+- Receipt paper/content widths, margins and horizontal offset in millimetres; printer discovery, LAN port checks and scanner input tests.
 
 Card and QR entries record externally verified payments; they do not initiate a bank or card charge. Printing uses the browser print flow. LAN printer routing, cash drawer control, and payment terminal integration require separate hardware integration and testing.
+
+## Vercel and backend hosting
+
+Vercel's static frontend needs the persistent Node.js API. A frontend-only deploy cannot authenticate staff. Follow the [Render backend and Vercel connection guide](docs/HOSTING-VERCEL-RENDER.md) for the exact build commands, persistent disk, private owner PIN and same-origin API rewrite. The examples in `deployment/` are templates; fill in your actual backend origin before activating them.
+
+Render's free filesystem does not retain a local SQLite database across restarts or deploys. Use a paid persistent disk for this architecture. Hosting the API in the cloud requires internet for confirmed orders and payments. Use the branch hub over LAN for the offline workflow described below.
+
+Settings saves text size, shortcuts and receipt alignment on each browser/device. Defaults include F2 search, F3 new bill, F4 hold, F8 payment, F9 kitchen, F10 receipt and Alt+0 settings; open the keyboard icon for the current assignments. Back closes the most recent dialog, drawer or POS filter before returning to the previous workspace screen. It does not reverse a saved sale or prevent a user from closing a browser tab.
+
+Printer discovery describes the machine running the hub. With a cloud-hosted hub it cannot discover a cashier's local printer queues or private LAN. Use browser printer selection and an actual test receipt at the register. Scanner keyboard mode works through received input; supported desktop browsers can also offer a consent-based HID chooser. A responding network port is not proof that paper printed.
 
 ## Offline and cloud behavior
 
@@ -76,7 +90,7 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-Browser tests start an isolated hub on port `3101`, use a new temporary SQLite database, and disable cloud sync. They exercise menu/cart behavior, kitchen handoff and cash payment, hub outage drafts, management pages, and mobile navigation. Build before running them; they use the production frontend files in `dist`. Failures retain a screenshot and browser trace in `test-results`. The tests leave the normal development database untouched. Do not direct this suite at a live branch.
+Browser tests start an isolated hub on port `3101`, use a new temporary SQLite database, and disable cloud sync. They exercise menu/cart behavior, kitchen handoff and cash payment, hub outage drafts, step-by-step Back, text/shortcut/receipt preferences, held-bill updates, barcoded product setup, customer credit/collection, statement downloads, and mobile navigation. Build before running them; they use the production frontend files in `dist`. Failures retain a screenshot and browser trace in `test-results`. The tests leave the normal development database untouched. Do not direct this suite at a live branch.
 
 To use an already installed Google Chrome, set `PLAYWRIGHT_CHANNEL=chrome` in the test process environment. The browser suite blocks service workers for deterministic network tests; installed-PWA and actual device/printer checks remain part of the site pilot.
 
