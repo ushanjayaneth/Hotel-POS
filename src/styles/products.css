@@ -535,3 +535,5 @@
     font-size: 8px;
   }
 }
+
+.product-profit-preview{display:flex;flex-wrap:wrap;gap:12px 24px;padding:14px 16px;background:rgba(117,219,174,.06);border:1px solid rgba(117,219,174,.14);border-radius:10px;font-size:12px}.product-profit-preview span{display:flex;align-items:center;gap:12px}.product-profit-preview strong{color:#a0e2bd;font-weight:600}.product-profit-preview small{flex-basis:100%;color:var(--muted);font-size:10px;line-height:1.6}

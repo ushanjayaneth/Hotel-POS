@@ -9,7 +9,7 @@ const baseURL = 'http://127.0.0.1:3101';
 
 export default defineConfig({
   testDir: './tests',
-  testMatch: 'e2e.spec.ts',
+  testMatch: ['e2e.spec.ts','*.e2e.spec.ts'],
   fullyParallel: false,
   workers: 1,
   retries: 0,

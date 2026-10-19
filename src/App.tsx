@@ -34,6 +34,7 @@ import {
   ArrowLeft,
   Keyboard,
   PauseCircle,
+  Database,
 } from "lucide-react";
 import { registerSW } from "virtual:pwa-register";
 import type { Page, Snapshot, User } from "../shared/types";
@@ -49,6 +50,18 @@ import HeldBills from './pages/HeldBills';
 import {WorkspacePreferences} from './components/WorkspacePreferences';
 import {NavigationProvider,useNavigation,useBackLayer} from './lib/navigation';
 import {useDevicePreferences,shortcutActions,keyboardCombination,dispatchShortcut,type ShortcutAction} from './lib/preferences';
+import {useWorkspaceMode,setWorkspaceMode,readSavedWorkspaceMode} from './lib/workspace-mode';
+import {getLocalWorkspaceInfo,type LocalWorkspaceInfo} from './lib/local/core';
+import {recoverRestoredDrafts} from './lib/local/backup';
+import {DeviceSetup,InitialDeviceRestore} from './components/DeviceSetup';
+import {syncLocalProductPhotos} from './lib/media';
+
+// Optional UI preferences must never block access to committed business records.
+const uiStorage = {
+  getItem(key: string) {try {return localStorage.getItem(key);} catch {return null;}},
+  setItem(key: string, value: string) {try {localStorage.setItem(key, value);} catch {/* The device database remains authoritative. */}},
+  removeItem(key: string) {try {localStorage.removeItem(key);} catch {/* An unavailable preference store does not invalidate a session. */}},
+};
 
 const navigation = [
   {
@@ -102,14 +115,7 @@ function Brand() {
   return (
     <div className="brand">
       <div className="brand-mark">
-        <svg viewBox="0 0 32 32" fill="none" aria-hidden="true">
-          <path
-            d="M8 5h7c8 0 12 4 12 11s-4 11-12 11H8V5Z"
-            stroke="currentColor"
-            strokeWidth="2.8"
-          />
-          <path d="M12 5v22m5-22v22" stroke="currentColor" strokeWidth="1.8" />
-        </svg>
+        <img src="/icons/app-icon-192.png" alt="" width="42" height="42" />
       </div>
       <div className="brand-wordmark">
         <div className="brand-name">DEMO HOTEL</div>
@@ -119,7 +125,8 @@ function Brand() {
   );
 }
 
-function Login({ onLogin }: { onLogin: (user: User) => void }) {
+function Login({ onLogin,onSetup,onRestore,deviceInfo }: { onLogin: (user: User) => void;onSetup:()=>void;onRestore:()=>void;deviceInfo:LocalWorkspaceInfo|null }) {
+  const mode=useWorkspaceMode();
   const [pin, setPin] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -182,7 +189,7 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
           </div>
           <div className="eyebrow">YOUR RESTAURANT, CONNECTED</div>
           <h2>Welcome back.</h2>
-          <p>Enter your staff PIN to open your workspace.</p>
+          <p>{mode==='device'?'Enter your private staff PIN to open this device’s saved workspace.':'Enter your staff PIN to open your workspace.'}</p>
           {error && (
             <div className="error-message" role="alert">
               {error}
@@ -217,7 +224,7 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
               </>
             )}
           </button>
-          <div className="login-divider">just looking around?</div>
+          {mode==='hub' && <><div className="login-divider">just looking around?</div>
           <button
             className="button demo-login"
             type="button"
@@ -230,7 +237,9 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
             Sample restaurant data · no real payments
             <br />
             Demo owner PIN: 1234
-          </p>
+          </p></>}
+          {mode==='hub'&&<div className="device-login-option"><div className="login-divider">work on this device</div>{deviceInfo?<button type="button" className="button full-width" onClick={()=>setWorkspaceMode('device')}><Database size={15}/> Open saved device workspace</button>:<><button type="button" className="button full-width" onClick={onSetup}><Database size={15}/> Set up this device</button><button type="button" className="button button-ghost full-width" onClick={onRestore}>Restore device backup</button><p className="demo-caption">Keep your workspace on this device. No hosted backend required.</p></>}</div>}
+          {mode==='device'&&<><p className="demo-caption">{deviceInfo?'Saved on this device · Setup complete':'Device data is unavailable. Restore your backup or create a new workspace.'}<br/><button type="button" className="button button-ghost button-small" onClick={()=>setWorkspaceMode('hub')}>Use branch hub instead</button></p>{!deviceInfo&&<div className="device-login-option"><button type="button" className="button full-width" onClick={onRestore}>Restore device backup</button><button type="button" className="button button-ghost full-width" onClick={onSetup}>Set up this device</button></div>}</>}
         </form>
         <div className="login-bottom">
           <ShieldCheck size={12} /> Your session stays on this device.
@@ -241,13 +250,19 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
 }
 
 function WorkspaceApp() {
+  const mode=useWorkspaceMode();
+  const deviceMode=mode==='device';
+  const [deviceInfo,setDeviceInfo]=useState<LocalWorkspaceInfo|null>(null);
+  const [deviceSetup,setDeviceSetup]=useState(false);
+  const [deviceRestore,setDeviceRestore]=useState(false);
+  const localWrites=useRef(0);
   const {route,navigate:routeTo,back}=useNavigation();
   const preferences=useDevicePreferences();
   const [user, setUser] = useState<User | null>(null);
   const [starting, setStarting] = useState(true);
   const [data, setData] = useState<Snapshot | null>(null);
   const [branchId, setBranchId] = useState(
-    () => localStorage.getItem("dh-branch") || "b1",
+    () => uiStorage.getItem("dh-branch") || "b1",
   );
   const page=route.page;
   const [loadError, setLoadError] = useState("");
@@ -261,6 +276,13 @@ function WorkspaceApp() {
   useBackLayer(mobileNav,()=>setMobileNav(false),'navigation');
   useBackLayer(notifications,()=>setNotifications(false),'notifications');
   useEffect(()=>{document.documentElement.style.setProperty('--font-scale',String(preferences.fontScale));},[preferences.fontScale]);
+  useEffect(()=>{
+    if(!deviceMode||!user)return;
+    const upload=()=>{void syncLocalProductPhotos().catch(()=>{});};
+    upload();const timer=setInterval(upload,45000);
+    window.addEventListener('online',upload);window.addEventListener('focus',upload);
+    return()=>{clearInterval(timer);window.removeEventListener('online',upload);window.removeEventListener('focus',upload);};
+  },[deviceMode,user]);
   const [toasts, setToasts] = useState<
     { id: number; message: string; type: string }[]
   >([]);
@@ -290,27 +312,37 @@ function WorkspaceApp() {
   }, []);
   useEffect(() => {
     let active = true;
-    api<{ user: User | null }>("/session")
+    setStarting(true);setUser(null);setData(null);setLoadError('');
+    setBranchId(uiStorage.getItem(deviceMode?'dh-device-branch':'dh-branch')||'b1');
+    void (async()=>{
+      const info=await getLocalWorkspaceInfo().catch(()=>null);
+      if(!active)return null;
+      setDeviceInfo(info);
+      if(info&&!readSavedWorkspaceMode()&&!deviceMode){setWorkspaceMode('device');return null;}
+      if(deviceMode)await recoverRestoredDrafts();
+      return api<{user:User|null}>('/session');
+    })()
       .then((result) => {
-        if (!active) return;
+        if (!active||!result) return;
         setUser(result.user);
         if (result.user)
-          localStorage.setItem("dh-last-user", JSON.stringify(result.user));
+          uiStorage.setItem(deviceMode?'dh-device-last-user':'dh-last-user', JSON.stringify(result.user));
       })
       .catch(() => {
+        if(!active)return;
         try {
-          const saved = localStorage.getItem("dh-last-user");
+          const saved = !deviceMode&&uiStorage.getItem("dh-last-user");
           if (saved) setUser(JSON.parse(saved));
           setHubOnline(false);
         } catch {
-          localStorage.removeItem("dh-last-user");
+          uiStorage.removeItem("dh-last-user");
         }
       })
       .finally(() => active && setStarting(false));
     return () => {
       active = false;
     };
-  }, []);
+  }, [mode]);
   const refresh = useCallback(async () => {
     if (!user) return;
     const generation = ++requestGeneration.current;
@@ -323,7 +355,7 @@ function WorkspaceApp() {
       setData(snapshot);
       setHubOnline(true);
       setLoadError("");
-      await browserDb.snapshots
+      if(!deviceMode)await browserDb.snapshots
         .put({
           id: cacheKey,
           data: snapshot,
@@ -336,7 +368,7 @@ function WorkspaceApp() {
       if (err instanceof ApiError && err.status === 401) {
         setUser(null);
         setData(null);
-        localStorage.removeItem("dh-last-user");
+        uiStorage.removeItem(deviceMode?'dh-device-last-user':'dh-last-user');
         return;
       }
       if (
@@ -348,15 +380,24 @@ function WorkspaceApp() {
         setBranchId(user.branchId);
         return;
       }
-      const cached = await browserDb.snapshots
+      const cached = !deviceMode&&await browserDb.snapshots
         .get(cacheKey)
         .catch(() => undefined);
       if (cached) setData(cached.data);
       else setLoadError((err as Error).message);
     }
-  }, [user, branchId]);
+  }, [user, branchId,mode]);
   useEffect(() => {
     void refresh();
+    if(deviceMode){
+      let timer:ReturnType<typeof setTimeout>|undefined;
+      const changed=()=>{if(localWrites.current)return;clearTimeout(timer);timer=setTimeout(()=>void refresh(),60);};
+      const visible=()=>{if(document.visibilityState==='visible')changed();};
+      const channel=typeof BroadcastChannel!=='undefined'?new BroadcastChannel('demo-hotel-device-changes'):null;
+      if(channel)channel.onmessage=changed;
+      window.addEventListener('local-workspace-change',changed);window.addEventListener('focus',changed);document.addEventListener('visibilitychange',visible);
+      return()=>{clearTimeout(timer);channel?.close();window.removeEventListener('local-workspace-change',changed);window.removeEventListener('focus',changed);document.removeEventListener('visibilitychange',visible);};
+    }
     const interval = setInterval(() => {
       if (document.visibilityState === "visible") void refresh();
     }, 12000);
@@ -369,9 +410,9 @@ function WorkspaceApp() {
   }, [user, page,routeTo]);
   const mutate = useCallback(
     async <T,>(path: string, body?: unknown, method?: string): Promise<T> => {
-      const result = await api<T>(path, body, method);
-      await refresh();
-      return result;
+      localWrites.current++;
+      try{const result = await api<T>(path, body, method);await refresh();return result;}
+      finally{localWrites.current--;}
     },
     [refresh],
   );
@@ -413,20 +454,20 @@ function WorkspaceApp() {
     } catch {}
     setUser(null);
     setData(null);
-    localStorage.removeItem("dh-last-user");
-    await browserDb.snapshots.clear().catch(() => {});
+    uiStorage.removeItem(deviceMode?'dh-device-last-user':'dh-last-user');
+    if(!deviceMode)await browserDb.snapshots.clear().catch(() => {});
   }
   function onLogin(next: User) {
     setUser(next);
-    localStorage.setItem("dh-last-user", JSON.stringify(next));
+    uiStorage.setItem(deviceMode?'dh-device-last-user':'dh-last-user', JSON.stringify(next));
     if (next.branchId) {
       setBranchId(next.branchId);
-      localStorage.setItem("dh-branch", next.branchId);
+      uiStorage.setItem(deviceMode?'dh-device-branch':'dh-branch', next.branchId);
     }
     setStarting(false);
   }
   if (starting) return <Spinner />;
-  if (!user) return <Login onLogin={onLogin} />;
+  if (!user) return <><Login onLogin={onLogin} onSetup={()=>setDeviceSetup(true)} onRestore={()=>setDeviceRestore(true)} deviceInfo={deviceInfo}/>{deviceSetup&&<DeviceSetup onClose={()=>setDeviceSetup(false)} onComplete={(next)=>{setDeviceSetup(false);setBranchId('b1');setUser(next);uiStorage.setItem('dh-device-last-user',JSON.stringify(next));void getLocalWorkspaceInfo().then(setDeviceInfo);}}/>}{deviceRestore&&<InitialDeviceRestore onClose={()=>setDeviceRestore(false)}/>}</>;
   if (!data || data.branch.id !== branchId) {
     if (loadError)
       return (
@@ -504,7 +545,7 @@ function WorkspaceApp() {
             <div className="hub-status">
               <i className={`status-dot ${!hubOnline ? "offline" : ""}`} />
               <span>
-                {hubOnline ? "Branch hub connected" : "Hub unavailable"}
+                {deviceMode?'Device database ready':hubOnline ? "Branch hub connected" : "Hub unavailable"}
               </span>
             </div>
             <div className="user-card">
@@ -556,7 +597,7 @@ function WorkspaceApp() {
                   disabled={!!user.branchId}
                   onChange={(e) => {
                     setBranchId(e.target.value);
-                    localStorage.setItem("dh-branch", e.target.value);
+                    uiStorage.setItem(deviceMode?'dh-device-branch':'dh-branch', e.target.value);
                     routeTo(page,null,true);
                   }}
                 >
@@ -605,11 +646,11 @@ function WorkspaceApp() {
                   <div>
                     {data.sync.configured
                       ? `${data.sync.pending} changes waiting to sync.`
-                      : "Your data is stored at this branch."}
+                      : deviceMode?'Your data is stored on this device.':"Your data is stored at this branch."}
                     <small>
                       {data.sync.configured
                         ? "Cloud sync configured"
-                        : "Connect cloud sync in Settings"}
+                        : deviceMode?'Export encrypted backups in Settings':"Connect cloud sync in Settings"}
                     </small>
                   </div>
                 </div>
@@ -657,7 +698,7 @@ function WorkspaceApp() {
             )}
             <div className="footer-line">
               <span>
-                <ShieldCheck size={10} /> Local-first restaurant workspace
+                <ShieldCheck size={10} /> {deviceMode?'Device workspace · Saved locally':'Local-first restaurant workspace'}
               </span>
               <span>
                 DEMO HOTEL <i style={{ opacity: 0.4 }}>·</i> v0.1.0

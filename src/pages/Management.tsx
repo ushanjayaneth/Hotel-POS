@@ -1,3 +1,8 @@
+import ProductPhoto from '../components/ProductPhoto';
+import PhotoPicker from '../components/PhotoPicker';
+import ProfitSummary from '../components/ProfitSummary';
+import {apiResponse} from '../lib/api';
+import {isDeviceWorkspace} from '../lib/workspace-mode';
 import {
   useEffect,
   useMemo,
@@ -47,6 +52,7 @@ import type {
   Shift,
 } from "../../shared/types";
 import { usePOS } from "../lib/context";
+import { portionIngredients } from "../../shared/costing";
 import { money, number, dateTime, commandId } from "../lib/format";
 import { useBackLayer } from "../lib/navigation";
 import { WorkspacePreferences } from "../components/WorkspacePreferences";
@@ -286,6 +292,8 @@ export default function Management({ page }: { page: Page }) {
   const [dialog, setDialog] = useState<Dialog>(null);
   const [formCommandId, setFormCommandId] = useState<string>(commandId);
   const [editingMenu, setEditingMenu] = useState<MenuItem | null>(null);
+  const [menuPhoto,setMenuPhoto]=useState("");
+  const [menuPhotoBusy,setMenuPhotoBusy]=useState(false);
   const [stockCategory, setStockCategory] =
     useState<InventoryItem["category"]>("ingredient");
   const [menuStockMode, setMenuStockMode] =
@@ -293,6 +301,7 @@ export default function Management({ page }: { page: Page }) {
   const [recipeLines, setRecipeLines] = useState<
     { key: string; quantity: string }[]
   >([{ key: "", quantity: "" }]);
+  const [recipeYield, setRecipeYield] = useState("1");
   const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
   const [selectedShift, setSelectedShift] = useState<Shift | null>(null);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(
@@ -390,7 +399,7 @@ export default function Management({ page }: { page: Page }) {
     setDialog(next);
   };
   const close = () => {
-    if (busy) return false;
+    if (busy || menuPhotoBusy) return false;
     setDialog(null);
     setError("");
     return true;
@@ -401,7 +410,7 @@ export default function Management({ page }: { page: Page }) {
     success: string,
   ) => {
     event.preventDefault();
-    if (busy) return;
+    if (busy || menuPhotoBusy) return;
     setBusy(true);
     setError("");
     try {
@@ -420,7 +429,7 @@ export default function Management({ page }: { page: Page }) {
     }
   };
   const run = async (action: () => Promise<unknown>, success: string) => {
-    if (busy) return;
+    if (busy || menuPhotoBusy) return;
     setBusy(true);
     try {
       await action();
@@ -446,7 +455,7 @@ export default function Management({ page }: { page: Page }) {
         >
           {"Cancel"}
         </button>
-        <button type="submit" className="button button-primary" disabled={busy}>
+        <button type="submit" className="button button-primary" disabled={busy || menuPhotoBusy}>
           {busy ? "Saving…" : text}
           <Check size={16} />
         </button>
@@ -931,16 +940,21 @@ export default function Management({ page }: { page: Page }) {
       ? item.id.slice(branchId.length + 1)
       : item.id;
   const ingredients = inventory.filter(
-    (item) => item.category === "ingredient",
+    (item) => ["ingredient", "packaging"].includes(item.category),
   );
+  const recipeBatchCost = Math.round(recipeLines.reduce((sum, line) => sum +
+    (ingredients.find(item => ingredientKey(item) === line.key)?.unitCost || 0) * Number(line.quantity || 0), 0));
+  const recipePortionCost = Number(recipeYield) > 0 ? Math.round(recipeBatchCost / Number(recipeYield)) : 0;
   const startRecipe = (item: MenuItem) => {
     setEditingMenu(item);
     const recipe = data.recipes?.find((recipe) => recipe.id === item.id);
+    const batchYield = recipe?.batchYield || 1;
+    setRecipeYield(String(batchYield));
     setRecipeLines(
       recipe?.ingredients.length
         ? recipe.ingredients.map((line) => ({
             key: line.key,
-            quantity: String(line.quantity),
+            quantity: String(Math.round(line.quantity * batchYield * 100000000) / 100000000),
           }))
         : [{ key: "", quantity: "" }],
     );
@@ -949,6 +963,7 @@ export default function Management({ page }: { page: Page }) {
   const startMenu = (item: MenuItem | null) => {
     setEditingMenu(item);
     setMenuStockMode(item?.stockMode || "prepared");
+    setMenuPhoto(item?.image||"");setMenuPhotoBusy(false);
     open("menu");
   };
   const menuCatalog = (
@@ -1007,7 +1022,7 @@ export default function Management({ page }: { page: Page }) {
                       <div className="table-item">
                         <div className="catalog-food-image">
                           {item.image ? (
-                            <img src={item.image} alt="" />
+                            <ProductPhoto src={item.image} alt="" />
                           ) : (
                             <Coffee size={18} />
                           )}
@@ -1268,9 +1283,7 @@ export default function Management({ page }: { page: Page }) {
     }
     setBusy(true);
     try {
-      const response = await fetch(reportURL("csv"), {
-        credentials: "same-origin",
-      });
+      const response = await apiResponse(reportURL("csv"));
       if (!response.ok) {
         const body = await response.json();
         throw new Error(body.error || "Unable to download the report.");
@@ -1314,9 +1327,7 @@ export default function Management({ page }: { page: Page }) {
         .replaceAll(">", "&gt;")
         .replaceAll('"', "&quot;");
     try {
-      const response = await fetch(reportURL("json"), {
-        credentials: "same-origin",
-      });
+      const response = await apiResponse(reportURL("json"));
       const report = (await response.json()) as {
         error?: string;
         income: number;
@@ -1408,6 +1419,7 @@ export default function Management({ page }: { page: Page }) {
       {header}
       {(page === "reports" || page === "finance") && financialDownloads}
       {page === "settings" && <WorkspacePreferences />}
+      {["overview","finance","reports"].includes(page)&&<ProfitSummary data={data}/>}
       {page === "overview" && (
         <>
           {stats}
@@ -1447,7 +1459,7 @@ export default function Management({ page }: { page: Page }) {
                       </span>
                       <div className="top-item-image">
                         {item.image ? (
-                          <img src={item.image} alt="" />
+                          <ProductPhoto src={item.image} alt="" />
                         ) : (
                           <Coffee size={22} />
                         )}
@@ -2779,7 +2791,7 @@ export default function Management({ page }: { page: Page }) {
                 </p>
               )}
             </section>
-            <section className="panel settings-backup">
+            {!isDeviceWorkspace() && <section className="panel settings-backup">
               <div className="management-card-heading">
                 <div>
                   <h2>{"Database backup"}</h2>
@@ -2816,7 +2828,7 @@ export default function Management({ page }: { page: Page }) {
                 <ArrowDownToLine size={16} />
                 {"Create & download backup"}
               </button>
-            </section>
+            </section>}
           </aside>
         </div>
       )}
@@ -3066,8 +3078,7 @@ export default function Management({ page }: { page: Page }) {
                         categoryId: value(fields, "categoryId"),
                         price: minor(fields.get("price")),
                         cost: minor(fields.get("cost")),
-                        image:
-                          value(fields, "image") || "/images/chicken-rice.jpg",
+                        image:menuPhoto || "/images/chicken-rice.jpg",
                         stockMode: menuStockMode,
                         available: fields.get("available") === "on",
                         preparationMinutes: Number(
@@ -3166,20 +3177,7 @@ export default function Management({ page }: { page: Page }) {
                     placeholder="e.g. Popular"
                   />
                 </Field>
-                <Field label="Photo URL" full>
-                  <input
-                    className="input"
-                    name="image"
-                    maxLength={500}
-                    defaultValue={editingMenu?.image || ""}
-                    placeholder="https://… or /images/filename.jpg"
-                    pattern="(/images/.*|https://.*)"
-                  />
-                  <small className="field-hint">
-                    Use an HTTPS photo URL or a photo already in the project’s
-                    images folder.
-                  </small>
-                </Field>
+                <PhotoPicker value={menuPhoto} onChange={setMenuPhoto} onBusyChange={setMenuPhotoBusy} disabled={busy}/>
                 <Field label="Description" full>
                   <textarea
                     className="input"
@@ -3220,10 +3218,12 @@ export default function Management({ page }: { page: Page }) {
                 submit(
                   event,
                   () => {
-                    const lines = recipeLines.map((line) => ({
+                    const enteredLines = recipeLines.map((line) => ({
                       key: line.key,
                       quantity: Number(line.quantity),
                     }));
+                    const batchYield = Number(recipeYield);
+                    const lines = portionIngredients(enteredLines, batchYield);
                     if (
                       lines.some(
                         (line) =>
@@ -3244,7 +3244,7 @@ export default function Management({ page }: { page: Page }) {
                       );
                     return mutate(
                       `/menu/${editingMenu.id}/recipe`,
-                      { commandId: formCommandId, ingredients: lines },
+                      { commandId: formCommandId, ingredients: lines, batchYield },
                       "PUT",
                     );
                   },
@@ -3255,10 +3255,14 @@ export default function Management({ page }: { page: Page }) {
               <div className="form-info">
                 <BookOpen size={18} />
                 <span>
-                  Enter ingredients for <strong>one portion</strong>. Quantities
-                  use the stock unit shown beside each ingredient. This recipe
-                  applies across branches.
+                  Enter the ingredients and packaging for your <strong>whole batch</strong>, then enter how many portions it makes.
+                  Quantities use each stock unit. The app calculates the cost and stock usage per portion. This recipe applies across branches.
                 </span>
+              </div>
+              <div className="form-grid">
+                <Field label="Recipe yield (portions)" full>
+                  <input className="input" aria-label="Recipe yield (portions)" type="number" min="1" max="100000" step="0.01" required value={recipeYield} onChange={event => setRecipeYield(event.target.value)} />
+                </Field>
               </div>
               <div className="recipe-form-lines">
                 {recipeLines.map((line, index) => {
@@ -3267,7 +3271,7 @@ export default function Management({ page }: { page: Page }) {
                   );
                   return (
                     <div key={index}>
-                      <Field label="Ingredient">
+                      <Field label="Ingredient / packaging">
                         <select
                           className="select"
                           required
@@ -3282,7 +3286,7 @@ export default function Management({ page }: { page: Page }) {
                             )
                           }
                         >
-                          <option value="">Select ingredient</option>
+                          <option value="">Select ingredient or packaging</option>
                           {ingredients.map((item) => (
                             <option key={item.id} value={ingredientKey(item)}>
                               {item.name} ({item.unit})
@@ -3295,12 +3299,12 @@ export default function Management({ page }: { page: Page }) {
                           )}
                         </select>
                       </Field>
-                      <Field label={`Quantity${item ? ` (${item.unit})` : ""}`}>
+                      <Field label={`Batch quantity${item ? ` (${item.unit})` : ""}`}>
                         <input
                           className="input"
                           type="number"
                           min="0.0001"
-                          max="10000"
+                          max="100000"
                           step="0.0001"
                           required
                           value={line.quantity}
@@ -3332,7 +3336,7 @@ export default function Management({ page }: { page: Page }) {
                   );
                 })}
               </div>
-              <div className="purchase-form-bottom">
+              <div className="purchase-form-bottom recipe-cost-preview">
                 <button
                   className="button button-ghost button-small"
                   type="button"
@@ -3341,29 +3345,23 @@ export default function Management({ page }: { page: Page }) {
                   }
                 >
                   <Plus size={14} />
-                  Add ingredient
+                  Add ingredient / packaging
                 </button>
                 <span>
-                  Recipe cost
+                  Total batch cost
                   <strong>
-                    {money(
-                      Math.round(
-                        recipeLines.reduce(
-                          (sum, line) =>
-                            sum +
-                            (ingredients.find(
-                              (item) => ingredientKey(item) === line.key,
-                            )?.unitCost || 0) *
-                              Number(line.quantity || 0),
-                          0,
-                        ),
-                      ),
-                    )}
+                    {money(recipeBatchCost)}
                   </strong>
                 </span>
               </div>
+              <div className="purchase-form-bottom">
+                <span>Cost per portion<strong>{money(recipePortionCost)}</strong></span>
+                <span>Selling price<strong>{money(editingMenu.price)}</strong></span>
+                <span>Gross profit / portion<strong>{money(editingMenu.price - recipePortionCost)}</strong></span>
+              </div>
               <p className="recipe-help">
-                Example: for 150 g of rice tracked in kilograms, enter 0.15 kg.
+                Example: 20 kg rice for 50 parcels = 0.4 kg per portion. Include oil, spices and containers as stock ingredients or packaging.
+                Direct ingredient and packaging costs appear here; record wages, rent and utilities as expenses.
               </p>
               {footer("Save recipe")}
             </form>

@@ -2,11 +2,21 @@
 
 This runbook describes the current DEMO HOTEL implementation. It is a deployment guide for a controlled pilot; it does not certify a production installation or complete the wider POS master plan.
 
+## Select a storage mode
+
+**Device workspace** runs confirmed transactions in the current browser's IndexedDB without a Node backend. On an HTTPS static deployment, choose **Set up this device**, create a private 6–12 digit Owner PIN, and complete initial app caching before testing offline use. Setup stays complete while the saved database exists. The persistence request is automatic only once; manual retry is in Settings. Device sessions/PIN hashes are separate from hub sessions, and no public demo PIN is assigned automatically.
+
+The app has no artificial total-record cap or automatic business-data deletion. Browser quotas, storage clearing, profile/origin changes, and device loss still apply. Export encrypted `.hotelbackup` files from Settings and keep independent copies. Restore validates the file before replacement, excludes active sessions, rotates the device identity, and retains historical receipts. The working database itself is not application-encrypted. See [DEVICE-WORKSPACE.md](DEVICE-WORKSPACE.md) for the complete setup and recovery procedure.
+
+Each device workspace is independent. Switching to a hub does not migrate records; copying/restoring a backup does not merge sales. Use one shared branch hub when cashier, waiter, and kitchen devices need the same current orders and stock. The remaining sections describe **hub mode**, except where stated otherwise.
+
 ## Branch topology
 
 Run one authoritative hub for each operating branch. Cashiers, waiters, kitchen devices, and managers use that hub's web address. Give the hub a stable LAN address or DNS name. Keep the hub, router, and critical printers on protected power. Maintain router/Wi-Fi access when internet service fails.
 
 The hub stores confirmed transactions in a local SQLite database with WAL journaling, full synchronous writes, foreign keys, and transactions. Each accepted mutation also writes an outgoing sync event in the same transaction. Browser IndexedDB stores drafts and cached snapshots; it is useful during a device disconnect and is not the system of record.
+
+That snapshot/draft-only behavior applies to hub mode. A standalone device workspace instead uses its separate IndexedDB business database as its local system of record.
 
 The demonstration branch selector shows separate branch records in a single database. Deploying independent hubs requires configured branch provisioning, distinct hub identities, a central receiver, and validated reporting/restore rules. Do not run multiple independent writable copies of a branch database or place SQLite files on a shared network drive.
 
@@ -63,7 +73,9 @@ Install the PWA only after checking login, online operation, and a controlled ou
 
 ## Backups
 
-An owner can create a backup through Settings. The hub uses SQLite's backup API, checks the resulting database with `PRAGMA integrity_check`, and writes a SHA-256 sidecar file. The current local destination is a `backups` directory next to `DATABASE_PATH`. The UI download exports the database; the checksum is returned by the backup API and the sidecar remains on the hub.
+In device mode, use the separate [encrypted device backup/restore procedure](DEVICE-WORKSPACE.md#encrypted-backup-and-restore). The following `.sqlite` procedure applies to hub mode only.
+
+An owner can create a hub backup through Settings. The hub uses SQLite's backup API, checks the resulting database with `PRAGMA integrity_check`, and writes a SHA-256 sidecar file. The current local destination is a `backups` directory next to `DATABASE_PATH`. The UI download exports the database; the checksum is returned by the backup API and the sidecar remains on the hub.
 
 1. Create a backup after a closed shift and before upgrades or maintenance.
 2. Copy the `.sqlite` file **and its `.sqlite.sha256` sidecar** to an encrypted off-device location. A backup on the same disk does not protect against disk loss.
@@ -90,7 +102,7 @@ The tool validates the checksum when a sidecar is present, checks SQLite integri
 
 ## Firebase sync integration
 
-The included `server/cloud.ts` runs as a separate trusted service between branch hubs and Firebase Realtime Database. It uses the Firebase Admin SDK with Application Default Credentials. No actual Firebase project or credentials are configured in this workspace. Keep all service credentials on the receiver; browsers and branch client bundles must never receive them. [Firebase Admin setup](https://firebase.google.com/docs/database/admin/start).
+The included `server/cloud.ts` runs as a separate trusted service between branch hubs and Firebase Realtime Database. It uses the Firebase Admin SDK with Application Default Credentials. The actual Firebase receiver credentials and live deployment still need to be supplied and verified; a configured database URL by itself does not connect the project. Keep all service credentials on the receiver; browsers and branch client bundles must never receive them. [Firebase Admin setup](https://firebase.google.com/docs/database/admin/start).
 
 Configure these values in the receiver's protected service environment, then start it with `npm run start:cloud`:
 
@@ -120,6 +132,8 @@ On each branch hub, set `HUB_ID` to its credential key, `HUB_BRANCH_ID` to its a
 
 When configured, the hub queues an initial branch baseline plus later command changes. The baseline includes public catalog/branch/staff records, settings, stock, history, and operational records. It excludes credential hashes/salts, sessions, and local command bookkeeping. The cloud projection therefore cannot replace a full SQLite backup for complete recovery.
 
+Uploaded hub media is included in the baseline/change ledger. Device photo copies retry only with an already authenticated same-origin Owner/Manager hub session, and retain the original local bytes. They do not automatically authenticate a backend or merge device products, sales, payments, or stock. An online icon or a locally saved image is not confirmation of Firebase replication.
+
 ```json
 {
   "hubId": "colombo-hub",
@@ -148,9 +162,11 @@ A Firebase rules review, cloud authentication, monitoring, off-device backup ret
 
 ## Payments, printing, and compliance
 
+Product and recipe profitability uses confirmed-bill dates in Asia/Colombo, including unpaid/credit bills, rather than only cash receipts. Saved order-line costs preserve the applicable cost at confirmation; older lines without them are estimated. Refunds restate the original bill date, and consumed food costs remain. The operating estimate subtracts recorded operating expenses and cancelled food cost, excludes stock/ingredient purchase expense categories to avoid double counting, and omits unrecorded overheads/other write-offs. See [food costs and profit](DEVICE-WORKSPACE.md#food-costs-and-profit) before using these figures for management decisions.
+
 Cash/card/QR records are operational records. This app does not move money, integrate a payment gateway, confirm bank transactions, or store card data. Verify payment approvals independently. Test payment retries and the manager refund process with the actual business policy.
 
-Receipts use browser printing. Validate 58/80 mm paper settings, margins, fonts, printer drivers, repeated prints, power loss, and kitchen routing on actual equipment. Direct thermal/USB/network printers, cash drawers, and automatic printer discovery are not integrated.
+Receipts use browser printing. Validate 58/80 mm paper settings, margins, fonts, printer drivers, repeated prints, power loss, and kitchen routing on actual equipment. Hub printer discovery inspects the machine running the hub, and LAN checks only test a port; neither proves a receipt printed. Device-only mode uses the browser print dialog and scanner input tests. Direct printer queues/routing, cash drawers, and payment hardware still require separate integration.
 
 Tax, service-charge, invoice/receipt numbering, discounts, rounding, accounting exports, payroll, privacy, record retention, and statutory reporting require review against the business's current Sri Lankan obligations. The app is not certified for those requirements. Obtain accountant and owner sign-off on a controlled pilot before live trading.
 

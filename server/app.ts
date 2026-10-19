@@ -11,6 +11,9 @@ import { authenticate, branchScope, permit, sessionUser, asUser, setPin, verifyP
 import { initializeBusiness, registerBusinessRoutes, creditBalance, draftSchema, receiptDefaults, validateReceiptSettings, validateMenuCodes, type HeldBillRecord, type CreditRecord, type ReceiptSettings } from './business';
 import { renderReceipt } from './receipt';
 import { listSystemPrinters, probeNetworkPrinter } from './peripherals';
+import {registerMediaRoutes} from './media';
+import {isProductImageReference} from '../shared/media';
+import { productCost, weightedUnitCost } from '../shared/costing';
 
 const command = z.string().min(8).max(160);
 const id = z.string().min(1).max(160);
@@ -43,7 +46,10 @@ export async function createApp(options: AppOptions = {}) {
   const audit = (user:User,branchId:string,action:string,detail:string) => store.put<AuditEvent>('audit',{id:uid('audit'),branchId,action,actor:user.name,detail,createdAt:now()});
   const settings = () => ({...receiptDefaults,...JSON.parse(store.meta('settings')!)} as ReceiptSettings);
   const openShift = (branchId:string) => store.list<Shift>('shift',branchId).find(x=>x.status==='open');
-  const publicOrder = (user:User,order:Order):Order => user.role==='kitchen'?{...order,customerId:null,subtotal:0,discount:0,tax:0,serviceCharge:0,total:0,paid:0,refunded:0,payments:[],lines:order.lines.map(line=>({...line,unitPrice:0,lineTotal:0}))}:user.role==='waiter'?{...order,payments:[]}:order;
+  const publicOrder = (user:User,order:Order):Order => {
+    const visible = ['owner','manager','accountant'].includes(user.role) ? order : {...order,lines:order.lines.map(({unitCost:_cost,costBasis:_basis,...line})=>line)};
+    return user.role==='kitchen'?{...visible,customerId:null,subtotal:0,discount:0,tax:0,serviceCharge:0,total:0,paid:0,refunded:0,payments:[],lines:visible.lines.map(line=>({...line,unitPrice:0,lineTotal:0}))}:user.role==='waiter'?{...visible,payments:[]}:visible;
+  };
   const ingredientStock = (branchId:string,key:string) => {
     const candidate=store.get<InventoryItem>('inventory',`${branchId}-${key}`)??store.get<InventoryItem>('inventory',key);
     return candidate?.branchId===branchId?candidate:undefined;
@@ -156,6 +162,7 @@ export async function createApp(options: AppOptions = {}) {
   });
   app.post('/api/logout',async(request,reply)=>{if(request.cookies.demo_hotel_session)store.db.prepare('DELETE FROM sessions WHERE token_hash=?').run(sha(request.cookies.demo_hotel_session));reply.clearCookie('demo_hotel_session',{path:'/'});return {ok:true};});
   registerBusinessRoutes(app,{store,getUser,scoped,audit,openShift});
+  registerMediaRoutes(app,{store,getUser,scoped,audit});
   app.get('/api/devices/printers',async request=>{const user=getUser(request);permit(user,['owner','manager','cashier']);return listSystemPrinters();});
   app.post('/api/devices/printer-check',async request=>{const user=getUser(request);permit(user,['owner','manager','cashier']);const body=z.object({host:z.string().trim().min(1).max(253),port:z.number().int().min(1).max(65535).default(9100)}).parse(request.body);return probeNetworkPrinter(body.host,body.port);});
   app.get('/api/bootstrap',async request=>{
@@ -196,8 +203,11 @@ export async function createApp(options: AppOptions = {}) {
       const counterKey=`receipt:${body.branchId}:${businessDate}`;const seq=Number(store.meta(counterKey)??0)+1;store.setMeta(counterKey,String(seq));
       const number=`${branch.code}-${businessDate.replaceAll('-','')}-${String(seq).padStart(4,'0')}`;
       const lines=body.lines.map(x=>{
-        const item=store.get<MenuItem>('menu',x.menuItemId);requireThat(item&&item.available,'A selected menu item is unavailable.',409,'ITEM_UNAVAILABLE');consume(user,body.branchId,item,x.quantity,number);
-        return {id:uid('line'),menuItemId:item.id,name:item.name,nameSi:item.nameSi,quantity:x.quantity,unitPrice:item.price,lineTotal:item.price*x.quantity,note:x.note};
+        const item=store.get<MenuItem>('menu',x.menuItemId);requireThat(item&&item.available,'A selected menu item is unavailable.',409,'ITEM_UNAVAILABLE');
+        const cost=productCost(item,store.list<InventoryItem>('inventory',body.branchId),store.list<Recipe>('recipe'),body.branchId);
+        requireThat(Number.isSafeInteger(cost.unitCost)&&cost.unitCost>=0&&Number.isSafeInteger(cost.unitCost*x.quantity),'The calculated unit cost is invalid.',409);
+        consume(user,body.branchId,item,x.quantity,number);
+        return {id:uid('line'),menuItemId:item.id,name:item.name,nameSi:item.nameSi,quantity:x.quantity,unitPrice:item.price,unitCost:cost.unitCost,costBasis:cost.complete?'captured' as const:'estimated' as const,lineTotal:item.price*x.quantity,note:x.note};
       });
       const subtotal=lines.reduce((sum,x)=>sum+x.lineTotal,0);requireThat(body.discount<=subtotal,'Discount cannot exceed the subtotal.');
       const cfg=settings();const taxable=subtotal-body.discount;const serviceCharge=body.type==='dine-in'?Math.round(taxable*cfg.serviceChargeRate/100):0;const tax=Math.round((taxable+serviceCharge)*cfg.taxRate/100);
@@ -206,7 +216,7 @@ export async function createApp(options: AppOptions = {}) {
       store.put('order',order);
       if(body.heldBillId){const held=store.get<HeldBillRecord>('held',body.heldBillId)!;store.put('held',{...held,status:'resumed' as const,resumedOrderId:order.id,updatedAt:now()});}
       if(body.tableId){const table=store.get<DiningTable>('table',body.tableId)!;store.put('table',{...table,status:'occupied' as const,orderId});}
-      audit(user,body.branchId,'order.created',`${number} · ${lines.length} items`);return {ok:true,order};
+      audit(user,body.branchId,'order.created',`${number} · ${lines.length} items`);return {ok:true,order:publicOrder(user,order)};
     });
   });
   app.patch('/api/orders/:id/status',async request=>{
@@ -248,7 +258,7 @@ export async function createApp(options: AppOptions = {}) {
       if(body.method==='credit'&&order.customerId)store.put<CreditRecord>('credit',{id:`credit-${payment.id}`,branchId:order.branchId,customerId:order.customerId,orderId:order.id,type:'sale',amount:body.amount,method:'credit',reference:payment.reference,note:`Credit sale ${order.number}`,createdAt:payment.createdAt,createdBy:user.id});
       if(order.customerId) {const customer=store.get<Customer>('customer',order.customerId)!;store.put('customer',{...customer,spent:customer.spent+body.amount,visits:customer.visits+(paid===order.total?1:0),balance:customer.balance+(body.method==='credit'?body.amount:0),points:customer.points+Math.floor(body.amount/10000)});}
       if(updated.status==='completed')releaseTable(updated);
-      audit(user,order.branchId,'payment.accepted',`${order.number} · ${body.method} · ${body.amount}`);return {ok:true,order:updated,payment};
+      audit(user,order.branchId,'payment.accepted',`${order.number} · ${body.method} · ${body.amount}`);return {ok:true,order:publicOrder(user,updated),payment};
     });
   });
   app.post('/api/orders/:id/refunds',async request=>{
@@ -266,7 +276,7 @@ export async function createApp(options: AppOptions = {}) {
       if(refundMethod==='credit'&&order.customerId)store.put<CreditRecord>('credit',{id:`credit-${refundId}`,branchId:order.branchId,customerId:order.customerId,orderId:order.id,type:'refund',amount:body.amount,method:'credit',reference:'',note:body.reason,createdAt:refundedAt,createdBy:user.id});
       const refunded=order.refunded+body.amount;const updated:Order={...order,refunded,paymentStatus:refunded===order.paid?'refunded':'partial',updatedAt:now(),version:order.version+1};store.put('order',updated);
       if(order.customerId){const c=store.get<Customer>('customer',order.customerId)!;store.put('customer',{...c,spent:Math.max(0,c.spent-body.amount),balance:Math.max(0,c.balance-(refundMethod==='credit'?body.amount:0)),points:Math.max(0,c.points-Math.floor(body.amount/10000))});}
-      audit(user,order.branchId,'payment.refunded',`${order.number} · ${body.amount} · ${body.reason}`);return {ok:true,order:updated};
+      audit(user,order.branchId,'payment.refunded',`${order.number} · ${body.amount} · ${body.reason}`);return {ok:true,order:publicOrder(user,updated)};
     });
   });
   app.post('/api/inventory/adjust',async request=>{
@@ -299,6 +309,9 @@ export async function createApp(options: AppOptions = {}) {
       const target=store.list<InventoryItem>('inventory',body.branchId).find(x=>x.menuItemId===item.id&&x.category==='prepared');requireThat(target,'Prepared stock item is not configured.',409);
       consume(user,body.branchId,item,body.quantity,body.note||`Production: ${item.name}`,true);moveStock(user,target,body.quantity,'production','Prepared portions');
       const recipe=store.get<Recipe>('recipe',item.id)!;const perPortion=recipe.ingredients.reduce((sum,x)=>sum+(ingredientStock(body.branchId,x.key)?.unitCost??0)*x.quantity,0);
+      requireThat(Number.isSafeInteger(Math.round(perPortion*body.quantity))&&perPortion*body.quantity<=1_000_000_000,'Production cost exceeds the allowed limit.');
+      const produced=store.get<InventoryItem>('inventory',target.id)!;
+      store.put('inventory',{...produced,unitCost:weightedUnitCost(target.quantity,target.unitCost,body.quantity,Math.round(perPortion*body.quantity)),updatedAt:now()});
       const batch:ProductionBatch={id:uid('batch'),branchId:body.branchId,menuItemId:item.id,name:item.name,quantity:body.quantity,cost:Math.round(perPortion*body.quantity),note:body.note,createdAt:now(),createdBy:user.id};store.put('production',batch);audit(user,body.branchId,'production.recorded',`${item.name} · ${body.quantity} portions`);return {ok:true,batch:user.role==='kitchen'?{...batch,cost:0}:batch};
     });
   });
@@ -324,23 +337,24 @@ export async function createApp(options: AppOptions = {}) {
       const customer:Customer={id:uid('customer'),name:body.name,phone:body.phone,email:body.email,visits:0,spent:0,balance:0,points:0,createdAt:now()};store.put('customer',customer);audit(user,branchId,'customer.created',body.name);return {ok:true,customer};
     });
   });
-  const menuSchema=z.object({name:z.string().trim().min(2).max(120),nameSi:z.string().max(160).default(''),description:z.string().max(500).default(''),categoryId:id,price:amount,cost:money.default(0),image:z.string().max(500).refine(x=>x.startsWith('/images/')||x.startsWith('https://'),'Use a local /images/ path or HTTPS image URL.'),available:z.boolean().default(true),stockMode:z.enum(['prepared','recipe','untracked']),badge:z.string().max(30).optional(),preparationMinutes:z.number().int().min(0).max(180).default(10),barcode:z.string().trim().max(80).regex(/^[A-Za-z0-9 ._\/-]*$/).optional(),sku:z.string().trim().max(80).regex(/^[A-Za-z0-9 ._\/-]*$/).transform(x=>x.toUpperCase()).optional(),reorderLevel:z.number().finite().min(0).max(100000).optional()});
+  const menuSchema=z.object({name:z.string().trim().min(2).max(120),nameSi:z.string().max(160).default(''),description:z.string().max(500).default(''),categoryId:id,price:amount,cost:money.default(0),image:z.string().max(500).refine(x=>isProductImageReference(x)&&!x.startsWith('local-image:'),'Choose a photo link or upload a product photo.'),available:z.boolean().default(true),stockMode:z.enum(['prepared','recipe','untracked']),badge:z.string().max(30).optional(),preparationMinutes:z.number().int().min(0).max(180).default(10),barcode:z.string().trim().max(80).regex(/^[A-Za-z0-9 ._\/-]*$/).optional(),sku:z.string().trim().max(80).regex(/^[A-Za-z0-9 ._\/-]*$/).transform(x=>x.toUpperCase()).optional(),reorderLevel:z.number().finite().min(0).max(100000).optional()});
+  const requireProductPhoto=(image?:string)=>{if(image?.startsWith('/api/media/'))requireThat(store.get('media',image.slice('/api/media/'.length)),'Upload this product photo before saving the product.',404);};
   app.post('/api/menu',async request=>{
-    const user=getUser(request);permit(user,management);const body=menuSchema.extend({commandId:command.optional()}).parse(request.body);const branchId=user.branchId??'b1';
+    const user=getUser(request);permit(user,management);const body=menuSchema.extend({commandId:command.optional()}).parse(request.body);const branchId=user.branchId??'b1';requireProductPhoto(body.image);
     return store.command(body.commandId??uid('command'),user.id,'menu.create',branchId,body,()=>{requireThat(store.get('category',body.categoryId),'Category not found.',404);validateMenuCodes(store,body);const {commandId,...data}=body;const item:MenuItem={...data,id:uid('menu'),nameSi:data.nameSi||data.name};store.put('menu',item);audit(user,branchId,'menu.created',item.name);return {ok:true,item};});
   });
   app.patch('/api/menu/:id',async request=>{
-    const user=getUser(request);permit(user,management);const params=z.object({id}).parse(request.params);const body=menuSchema.partial().extend({commandId:command.optional()}).parse(request.body);const branchId=user.branchId??'b1';
+    const user=getUser(request);permit(user,management);const params=z.object({id}).parse(request.params);const body=menuSchema.partial().extend({commandId:command.optional()}).parse(request.body);const branchId=user.branchId??'b1';requireProductPhoto(body.image);
     return store.command(body.commandId??uid('command'),user.id,`menu.update:${params.id}`,branchId,body,()=>{const item=store.get<MenuItem>('menu',params.id);requireThat(item,'Menu item not found.',404);if(body.categoryId)requireThat(store.get('category',body.categoryId),'Category not found.',404);validateMenuCodes(store,body,item.id);const {commandId,...data}=body;const explicit=Object.fromEntries(Object.entries(data).filter(([key])=>Object.hasOwn(request.body as object,key)));const updated={...item,...explicit};store.put('menu',updated);audit(user,branchId,'menu.updated',updated.name);return {ok:true,item:updated};});
   });
   app.put('/api/menu/:id/recipe',async request=>{
-    const user=getUser(request);permit(user,['owner']);const params=z.object({id}).parse(request.params);const body=z.object({commandId:command,ingredients:z.array(z.object({key:z.string().regex(/^[a-zA-Z0-9_-]+$/),quantity})).min(1).max(50)}).parse(request.body);
+    const user=getUser(request);permit(user,['owner']);const params=z.object({id}).parse(request.params);const body=z.object({commandId:command,batchYield:z.number().finite().min(1).max(100000).default(1),ingredients:z.array(z.object({key:z.string().regex(/^[a-zA-Z0-9_-]+$/),quantity})).min(1).max(50)}).parse(request.body);
     return store.command(body.commandId,user.id,`recipe.update:${params.id}`,'b1',body,()=>{
       requireThat(store.get('menu',params.id),'Menu item not found.',404);
       requireThat(new Set(body.ingredients.map(x=>x.key)).size===body.ingredients.length,'Combine duplicate ingredients into one recipe line.');
       const inventory=store.list<InventoryItem>('inventory');
-      for(const line of body.ingredients)requireThat(inventory.some(x=>x.category==='ingredient'&&(x.id===line.key||x.id===`${x.branchId}-${line.key}`)),'Recipe ingredients must use configured ingredient keys.');
-      store.put('recipe',{id:params.id,ingredients:body.ingredients});audit(user,'b1','recipe.updated',params.id);return {ok:true};
+      for(const line of body.ingredients)requireThat(inventory.some(x=>['ingredient','packaging'].includes(x.category)&&(x.id===line.key||x.id===`${x.branchId}-${line.key}`)),'Recipes must use configured ingredients or packaging.');
+      store.put('recipe',{id:params.id,ingredients:body.ingredients,batchYield:body.batchYield});audit(user,'b1','recipe.updated',params.id);return {ok:true};
     });
   });
   app.post('/api/staff',async request=>{

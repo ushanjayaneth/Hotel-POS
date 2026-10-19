@@ -23,6 +23,9 @@ import type { Category, InventoryItem, MenuItem } from "../../shared/types";
 import { usePOS } from "../lib/context";
 import { commandId, money, number } from "../lib/format";
 import { useBackLayer } from "../lib/navigation";
+import { isProductImageReference } from "../../shared/media";
+import PhotoPicker from "../components/PhotoPicker";
+import ProductPhoto from "../components/ProductPhoto";
 import "../styles/products.css";
 
 type Product = MenuItem & {
@@ -280,10 +283,16 @@ export function ProductDialog({
   const [error, setError] = useState("");
   const savedProductId = useRef<string | null>(item?.id || null);
   const stockSaved = useRef(false);
+  const [image, setImage] = useState(product?.image || "");
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [sellingPrice, setSellingPrice] = useState(product ? String(product.price / 100) : "");
+  const [purchaseCost, setPurchaseCost] = useState(String((linkedStock?.unitCost ?? product?.cost ?? 0) / 100));
+  const previewPrice = Math.round(Number(sellingPrice || 0) * 100);
+  const previewCost = Math.round(Number(purchaseCost || 0) * 100);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (busy) return;
+    if (busy || photoBusy) return;
     const fields = new FormData(event.currentTarget);
     const text = (key: string) => String(fields.get(key) || "").trim();
     const cents = (key: string) =>
@@ -295,7 +304,7 @@ export function ProductDialog({
       categoryId: selectedCategory,
       price: cents("price"),
       cost: cents("cost"),
-      image: text("image") || "/images/chicken-rice.jpg",
+      image: image.trim() || "/images/chicken-rice.jpg",
       available: fields.get("enabled") === "on",
       stockMode,
       preparationMinutes: Number(fields.get("preparationMinutes") || 0),
@@ -305,6 +314,10 @@ export function ProductDialog({
     };
     if (!selectedCategory) {
       setError("Choose or create a category first.");
+      return;
+    }
+    if (!isProductImageReference(payload.image)) {
+      setError("Use an HTTPS image link or upload a product photo.");
       return;
     }
     setBusy(true);
@@ -372,7 +385,7 @@ export function ProductDialog({
         title={item ? "Edit product" : "Add product"}
         subtitle="Menu details apply across branches. Stock quantities apply to the selected branch."
         onClose={onClose}
-        busy={busy}
+        busy={busy || photoBusy}
       >
         <form onSubmit={submit}>
           <div className="form-grid">
@@ -434,7 +447,8 @@ export function ProductDialog({
                 min="0.01"
                 step="0.01"
                 required
-                defaultValue={product ? product.price / 100 : ""}
+                value={sellingPrice}
+                onChange={(event) => setSellingPrice(event.target.value)}
                 placeholder="0.00"
               />
             </Field>
@@ -446,9 +460,15 @@ export function ProductDialog({
                 min="0"
                 step="0.01"
                 required
-                defaultValue={product ? product.cost / 100 : "0"}
+                value={purchaseCost}
+                onChange={(event) => setPurchaseCost(event.target.value)}
               />
             </Field>
+            <div className="product-profit-preview product-field-full" aria-label="Product profit preview">
+              <span>Gross profit per unit <strong>{money(previewPrice - previewCost)}</strong></span>
+              <span>Gross margin <strong>{previewPrice > 0 ? `${((previewPrice - previewCost) / previewPrice * 100).toFixed(1)}%` : '—'}</strong></span>
+              <small>{stockMode === 'recipe' ? 'Use the recipe editor to calculate ingredient cost per portion. This preview uses the entered unit cost.' : 'Before discounts, tax and operating expenses. Sales retain their cost when confirmed.'}</small>
+            </div>
             <Field label="Barcode (optional)">
               <div className="product-barcode-field">
                 <Barcode size={16} />
@@ -498,16 +518,7 @@ export function ProductDialog({
                 }
               />
             </Field>
-            <Field label="Photo URL (optional)" full>
-              <input
-                className="input"
-                name="image"
-                maxLength={500}
-                pattern="(/images/.*|https://.*)"
-                defaultValue={product?.image || ""}
-                placeholder="https://… or /images/filename.jpg"
-              />
-            </Field>
+            <PhotoPicker value={image} onChange={setImage} onBusyChange={setPhotoBusy} disabled={busy} />
             <Field label="Description (optional)" full>
               <textarea
                 className="input"
@@ -631,11 +642,11 @@ export function ProductDialog({
               className="button button-ghost"
               type="button"
               onClick={onClose}
-              disabled={busy}
+              disabled={busy || photoBusy}
             >
               Cancel
             </button>
-            <button className="button button-primary" disabled={busy}>
+            <button className="button button-primary" disabled={busy || photoBusy}>
               {busy ? "Saving…" : item ? "Save product" : "Add product"}
               <Check size={15} />
             </button>
@@ -874,7 +885,7 @@ export default function Products() {
                       <div className="product-table-name">
                         <div className="product-table-image">
                           {product.image ? (
-                            <img src={product.image} alt="" loading="lazy" />
+                            <ProductPhoto src={product.image} alt="" loading="lazy" />
                           ) : (
                             <Package size={20} />
                           )}

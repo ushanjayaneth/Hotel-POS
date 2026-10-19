@@ -1,6 +1,14 @@
 # Host the frontend on Vercel and the backend on Render
 
-This guide connects the existing Vercel frontend to the Node backend and a persistent SQLite database. You complete the deployment in your own hosting accounts. The files in [deployment](../deployment/) are examples; they do not change the live site until you apply them.
+## No-backend option for standalone use
+
+The app now supports a **device workspace** without Render or another paid Node host. In Vercel, build with `npm run build`, use output directory `dist`, and deploy the latest frontend. No API rewrite is needed for standalone mode. Open the app through HTTPS, choose **Set up this device**, and create a private 6–12 digit Owner PIN. After setup and initial app caching, transactions can continue offline on that browser/device even when `/api/session` and `/api/health` are unavailable.
+
+This option keeps an independent IndexedDB database on each browser/device; it does not share cashier/kitchen data or synchronize financial records to Firebase. Browser storage is subject to browser quota and clearing. Use encrypted backups and follow [the device workspace guide](DEVICE-WORKSPACE.md). For shared operation without a cloud hosting bill, run the Node branch hub on a suitable shop computer and connect devices over the local network; trusted HTTPS and keeping that computer running need local setup.
+
+## Optional hosted shared hub
+
+The rest of this guide connects the Vercel frontend to a Node backend and persistent SQLite database. You complete deployment in your own hosting accounts. The files in [deployment](../deployment/) are examples; they do not change the live site until you apply them.
 
 Use a **paid Render Node web service with a persistent disk** for this version. Render's free web services cannot attach persistent disks and lose local SQLite files when they restart, redeploy, or spin down. See [Render free service limits](https://render.com/docs/free) and [persistent disks](https://render.com/docs/disks).
 
@@ -131,7 +139,7 @@ Create an application backup from Settings and keep a downloaded copy outside th
 
 ## Internet access, printers, and Firebase
 
-With this cloud backend, confirming orders, taking payments, and sharing branch data require an internet connection to Render. A cached browser app and saved local drafts remain useful during an outage, but they cannot confirm transactions while the backend is unreachable. For the original requirement to keep a whole branch operating without internet, run the Node hub on a branch computer or server reachable over the local network, with its database stored there. Hosting on Render does not replace that branch hub design.
+In shared-hub mode with this cloud backend, confirming orders, taking payments, and sharing branch data require an internet connection to Render. A cached hub workspace and drafts cannot confirm transactions while that backend is unreachable. The separate standalone device mode can confirm its own local transactions, but switching modes does not transfer or merge data with the hosted database. For a whole branch sharing orders/stock during an internet outage, use a Node hub on a branch computer reachable over LAN. Hosting on Render does not replace that branch topology.
 
 Printer discovery and network printer checks run on the backend host. On Render they cannot see printers connected to your shop PC or private shop network. Browser printing can still use printers installed on the device. A local branch hub is needed for backend printer discovery in the shop. Barcode scanners operating as keyboards enter codes on the device running the browser.
 
@@ -141,7 +149,7 @@ Firebase synchronization is a separate setup. A Realtime Database URL alone does
 
 | Symptom                                 | What to check                                                                                                                                                                                                           |
 | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Vercel `/api/health` returns `404`      | Confirm root `vercel.json` exists, its destination includes `/api/:path*`, and the latest frontend deployment contains it.                                                                                              |
+| Vercel `/api/health` returns `404`      | Expected for static device-only hosting. For shared-hub mode, confirm root `vercel.json` exists, its destination includes `/api/:path*`, and the latest deployment contains it. |
 | Vercel returns `502` or a gateway error | Test Render `/api/health` directly and inspect Render startup logs.                                                                                                                                                     |
 | Sign-in returns `ORIGIN_FORBIDDEN`      | Match `ALLOWED_ORIGINS` to the exact frontend origin you are using. A Vercel preview address is a different origin.                                                                                                     |
 | Sign-in says PIN incorrect              | Use the PIN supplied for the first initialization of this database. Demo PIN `1234` does not belong to a new live database.                                                                                             |

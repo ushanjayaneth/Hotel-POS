@@ -1,3 +1,4 @@
+import {isDeviceWorkspace} from '../lib/workspace-mode';
 import {useCallback, useEffect, useRef, useState} from 'react';
 import {Check, CheckCircle2, CircleHelp, Clock3, Printer, RefreshCw, ScanBarcode, Unplug, Usb, Wifi, XCircle} from 'lucide-react';
 import type {NetworkPrinterCheck, PrinterDevice, PrinterDiscovery} from '../../shared/types';
@@ -30,7 +31,7 @@ export default function DeviceSettings() {
   const [lastScan, setLastScan] = useState<ScannerInputResult | null>(null);
   const [scanError, setScanError] = useState('');
   const scanTiming = useRef<{started: number | null; count: number; pasted: boolean}>({started: null, count: 0, pasted: false});
-  const canInspect = ['owner', 'manager', 'cashier'].includes(data.user.role);
+  const canInspect = !isDeviceWorkspace() && ['owner', 'manager', 'cashier'].includes(data.user.role);
 
   useEffect(() => {
     const saved = loadPrinterPreference(branchId);
@@ -132,7 +133,7 @@ export default function DeviceSettings() {
     <section className="panel device-card">
       <div className="device-card-heading"><div className="device-icon"><Printer size={20}/></div><div><h3>Printers on the branch hub</h3><p>Installed queues and the status reported by the operating system.</p></div>{canInspect && <button className="button button-ghost button-small" onClick={() => void refreshPrinters()} disabled={discovering}><RefreshCw size={14} className={discovering ? 'spin' : ''}/>{discovering ? 'Checking…' : 'Refresh printers'}</button>}</div>
       {printerError && <div className="device-error" role="alert">{printerError}</div>}
-      {!canInspect ? <p className="device-note">An owner, manager, or cashier can inspect hub printers.</p> : <>
+      {!canInspect ? <p className="device-note">{isDeviceWorkspace() ? 'Use this device?s browser print dialog. OS printer discovery needs a connected branch hub.' : 'An owner, manager, or cashier can inspect hub printers.'}</p> : <>
         {discovery && <p className="device-note">{discovery.message}</p>}
         {discovery && discovery.printers.length > 0 && <div className="device-printer-list">{discovery.printers.map(printer => <div className={`device-printer ${preference.selectedPrinterId === printer.id ? 'selected' : ''}`} key={printer.id}><div className="device-printer-top"><div><strong>{printer.name}</strong><span>{printer.driver || 'Installed printer'}{printer.portName ? ` · ${printer.portName}` : ''}</span></div><span className={`device-status ${printer.reportedStatus}`} title={printer.statusDetail}>{printer.reportedStatus === 'ready' ? <CheckCircle2 size={12}/> : printer.reportedStatus === 'offline' ? <XCircle size={12}/> : <CircleHelp size={12}/>} {printer.reportedStatus === 'ready' ? 'OS reports ready' : printer.reportedStatus === 'offline' ? 'OS reports offline' : 'Status unknown'}</span></div><div className="device-printer-bottom"><small>{printer.isDefault ? 'System default' : printer.statusDetail}</small><button className="button button-ghost button-small" onClick={() => selectPrinter(printer)}>{preference.selectedPrinterId === printer.id ? <><Check size={12}/> Saved preference</> : 'Save preference'}</button></div></div>)}</div>}
         {discovery && !discovery.printers.length && <div className="device-empty"><Printer size={23}/><span>{discovery.supported ? 'No printer queues available' : 'Use browser printer selection'}</span></div>}

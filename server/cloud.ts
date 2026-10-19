@@ -9,8 +9,8 @@ import { z, ZodError } from 'zod';
 import { ApiError, now, requireThat, sha, stable } from './database';
 
 const safeId=z.string().regex(/^[A-Za-z0-9_-]{1,160}$/);
-const kinds=['order','held','credit','inventory','movement','production','purchase','expense','shift','audit','refund','table','customer','supplier','staff','menu','recipe','category','branch','settings'] as const;
-const globalKinds=new Set(['customer','supplier','staff','menu','recipe','category','settings']);
+const kinds=['order','held','credit','inventory','movement','production','purchase','expense','shift','audit','refund','table','customer','supplier','staff','menu','recipe','category','branch','settings','media'] as const;
+const globalKinds=new Set(['customer','supplier','staff','menu','recipe','category','settings','media']);
 const eventSchema=z.object({id:safeId,commandId:safeId,branchId:safeId,sequence:z.number().int().positive().max(Number.MAX_SAFE_INTEGER),action:z.string().min(1).max(160),actor:safeId,createdAt:z.iso.datetime(),changes:z.array(z.object({kind:z.enum(kinds),id:safeId,branchId:safeId.nullable(),value:z.record(z.string(),z.unknown())}).strict()).max(5000)}).strict();
 export type CloudEvent=z.infer<typeof eventSchema>;
 export interface HubCredential { branchId:string;token:string }

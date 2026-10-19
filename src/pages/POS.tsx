@@ -1,3 +1,5 @@
+import ProductPhoto from '../components/ProductPhoto';
+import {deviceDraftId} from '../lib/workspace-mode';
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
@@ -69,6 +71,7 @@ export default function POS({
   const [discount, setDiscount] = useState(0);
   const [orderCommand, setOrderCommand] = useState(commandId);
   const [loadedBranch, setLoadedBranch] = useState("");
+  const [draftSaveError,setDraftSaveError]=useState('');
   const [busy, setBusy] = useState(false);
   const [paymentOrder, setPaymentOrder] = useState<string | null>(null);
   const [noteDialog, setNoteDialog] = useState(false);
@@ -100,7 +103,7 @@ export default function POS({
     let active = true;
     setLoadedBranch("");
     void browserDb.drafts
-      .get(branchId)
+      .get(deviceDraftId(branchId))
       .then((draft) => {
         if (!active) return;
         setLines(draft?.lines || []);
@@ -148,7 +151,8 @@ export default function POS({
       .catch(() => {
         if (active) {
           setLines([]);
-          setLoadedBranch(branchId);
+          setLoadedBranch('');
+          setDraftSaveError('Device draft storage is unavailable. Keep this page open until your order has been saved.');
           notify(
             "Device storage is unavailable. Keep this page open until your order is sent.",
             "error",
@@ -163,7 +167,7 @@ export default function POS({
     if (loadedBranch !== branchId) return;
     void browserDb.drafts
       .put({
-        id: branchId,
+        id: deviceDraftId(branchId),
         lines,
         type,
         tableId,
@@ -175,7 +179,8 @@ export default function POS({
         commandId: orderCommand,
         updatedAt: new Date().toISOString(),
       })
-      .catch(() => {});
+      .then(()=>setDraftSaveError(''))
+      .catch(()=>setDraftSaveError('This draft could not be saved on this device. Keep this page open and free storage before leaving.'));
   }, [
     lines,
     type,
@@ -468,6 +473,7 @@ export default function POS({
   }, [data.menu, activeOrder, busy, notify]);
   return (
     <>
+      {draftSaveError&&<div className="error-message" role="alert">{draftSaveError}</div>}
       <div className="page-heading">
         <div>
           <div className="eyebrow">
@@ -628,7 +634,7 @@ export default function POS({
                     aria-label={`Add ${item.name}`}
                   >
                     <div className="product-image-wrap">
-                      <img src={item.image} alt={item.name} loading="lazy" />
+                      <ProductPhoto src={item.image} alt={item.name} loading="lazy" />
                       {item.badge && (
                         <span
                           className={`product-badge ${item.badge.toLowerCase().includes("popular") ? "popular" : ""}`}

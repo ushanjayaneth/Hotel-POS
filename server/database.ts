@@ -83,7 +83,7 @@ export class Store {
     const marker=`cloudBaseline:v2:${sha(`${hubId}:${branchId}:${endpoint}`)}`;
     if(this.meta(marker))return;
     requireThat(this.get('branch',branchId),'The configured HUB_BRANCH_ID does not exist.',500);
-    const globals=new Set(['customer','supplier','staff','menu','recipe','category']);
+    const globals=new Set(['customer','supplier','staff','menu','recipe','category','media']);
     const rows=this.db.prepare('SELECT kind,id,branch_id,data FROM records ORDER BY rowid').all() as {kind:string;id:string;branch_id:string|null;data:string}[];
     const changes:{kind:string;id:string;branchId:string|null;value:Record<string,unknown>}[]=[];
     for(const row of rows) {

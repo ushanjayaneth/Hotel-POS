@@ -2,7 +2,7 @@
 
 The DEMO HOTEL sample menu uses real photographs, downloaded from the original source services on 17 October 2026. The images are demonstration menu illustrations; replace them with photographs of the hotel's actual dishes before publishing a customer menu.
 
-All local photos are cropped to a 3:2 ratio, resized to 600 × 400 pixels, and compressed as JPEG. They are served locally so the menu does not require an external image service. No generative images are included.
+The sample dish photos listed below are cropped to a 3:2 ratio, resized to 600 × 400 pixels, and compressed as JPEG. They are served locally so the sample menu does not require an external image service. These sample dish photos are not generative images. Product photos subsequently uploaded by a business are separate from this sample asset list.
 
 | Local file | Photograph and creator | License |
 | --- | --- | --- |
@@ -22,3 +22,7 @@ All local photos are cropped to a 3:2 ratio, resized to 600 × 400 pixels, and c
 The cropped versions of CC BY-SA photos retain their respective CC BY-SA licenses. Preserve these credits, source links, license links, and the change notice when redistributing those images. Share-alike applies to those adapted photographs; this document does not assign a license to application code.
 
 `public/images/credits.json` contains the corresponding structured credits, image dimensions, and byte counts for an in-app credits view or asset tooling.
+
+## App icon
+
+The app icon uses the POS artwork supplied by the user in this project conversation. Its exterior background was prepared with the built-in image-generation tool while preserving the supplied artwork and composition. The prepared source is `public/icons/app-icon-source.png`; the PWA, maskable, Apple touch, and favicon variants are deterministic resizes/layouts of that source. See [APP-ICON.md](APP-ICON.md) for the asset mapping and preparation instructions. No external license or copyright ownership has been verified or assigned by this repository.

@@ -81,6 +81,9 @@ export interface OrderLine {
   nameSi: string;
   quantity: number;
   unitPrice: number;
+  /** Cost per sold unit, in minor currency units, frozen when the bill is confirmed. */
+  unitCost?: number;
+  costBasis?: "captured" | "estimated";
   lineTotal: number;
   note: string;
 }
@@ -305,6 +308,8 @@ export interface NetworkPrinterCheck {
 }
 export interface Recipe {
   id: string;
+  /** Editor batch yield only. Ingredient quantities are always stored per portion. */
+  batchYield?: number;
   ingredients: { key: string; quantity: number }[];
 }
 export interface Snapshot {
