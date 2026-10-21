@@ -112,7 +112,7 @@ export default function POS({
       .then((draft) => {
         if (!active) return;
         setLines(draft?.lines || []);
-        setType(draft?.type === 'dine-in' && draft.tableId ? 'dine-in' : draft?.type === 'delivery' ? 'delivery' : 'takeaway');
+        setType(draft?.type || 'takeaway');
         setTableId(draft?.tableId || "");
         setCustomerId(draft?.customerId || "");
         setHeldBillId(draft?.heldBillId || "");
@@ -131,7 +131,7 @@ export default function POS({
           );
           if (bill) {
             setLines(bill.lines);
-            setType(bill.type==='dine-in'&&!bill.tableId?'takeaway':bill.type);
+            setType(bill.type);
             setTableId(bill.tableId || "");
             setCustomerId(bill.customerId || "");
             setNote(bill.note);
@@ -300,18 +300,13 @@ export default function POS({
       return;
     }
     if (!lines.length) return;
-    if (type === "dine-in" && !tableId) {
-      notify("Choose a table for this dine-in order.", "error");
-      setMobileCart(true);
-      return;
-    }
     setBusy(true);
     try {
       const result = await mutate<{ ok: boolean; order: Order }>("/orders", {
         commandId: orderCommand,
         branchId,
         type,
-        tableId: type === "dine-in" ? tableId : null,
+        tableId: type === "dine-in" ? tableId || null : null,
         customerId: creditCustomerId || customerId || null,
         ...(heldBillId
           ? { heldBillId, expectedHeldUpdatedAt: heldBillUpdatedAt }
@@ -349,7 +344,7 @@ export default function POS({
         },
         "PATCH",
       );
-      notify("Table closed and ready for the next guest.");
+      notify(activeOrder.tableId ? "Table closed and ready for the next guest." : "Order completed and ready for the next guest.");
       onReceipt(activeOrder.id);
       onSelectOrder(null);
     } catch (err) {
@@ -793,7 +788,7 @@ export default function POS({
                   onChange={(e) => setTableId(e.target.value)}
                   aria-label="Select table"
                 >
-                  <option value="">Select a table</option>
+                  <option value="">No table (optional)</option>
                   {data.tables
                     .filter(
                       (t) =>
@@ -1016,7 +1011,7 @@ export default function POS({
                 <CheckCircle2 size={16} />
                 {activeOrder.type === "dine-in" &&
                 ["ready", "served"].includes(activeOrder.status)
-                  ? "Close table & print"
+                  ? activeOrder.tableId ? "Close table & print" : "Complete & print"
                   : "View receipt"}
                 <ArrowRight size={16} />
               </button>

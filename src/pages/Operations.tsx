@@ -359,7 +359,7 @@ export function Orders({
                   </td>
                   <td>
                     {o.type === "dine-in"
-                      ? data.tables.find((t) => t.id === o.tableId)?.name
+                      ? data.tables.find((t) => t.id === o.tableId)?.name || "Dine in"
                       : o.type}
                   </td>
                   <td>{dateTime(o.createdAt)}</td>
@@ -791,7 +791,7 @@ export function Kitchen() {
                             <Icon size={12} />
                             {o.type === "dine-in"
                               ? data.tables.find((t) => t.id === o.tableId)
-                                  ?.name
+                                  ?.name || "Dine in"
                               : o.type}
                           </span>
                         </div>

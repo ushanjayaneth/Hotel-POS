@@ -20,7 +20,7 @@ First setup and app caching need an online connection. After caching, test offli
 ## Make a sale
 
 1. Open **Point of sale**, search/scan products, and add the required quantities.
-2. Counter sales start as **Takeaway**, which does not need a table. Choose **Dine-in** and a table for seated guests.
+2. Counter sales start as **Takeaway**. Tables are optional even with **Dine-in**: leave **No table (optional)** selected to sell without one, or select a table to track a seated guest. The configured dine-in service charge still applies.
 3. Owners/managers can enter fixed rupee **Item discount** amounts on a line and a **Cart discount** for the whole bill. An item discount covers the entire line, not each unit separately.
 4. Review the total, take payment, and confirm. Card/QR entries record payments checked separately on your bank/terminal; they do not charge or verify payments automatically.
 5. When the saved receipt opens, the register clears for the next customer. Cancelling the print dialog does not cancel the sale. Find the saved bill in **Sales history** to reprint; do not repeat checkout just to get a receipt.

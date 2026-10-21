@@ -2,7 +2,7 @@
 
 ## Counter sales and clearing the register
 
-New register drafts start as **Takeaway**. A normal counter sale does not need a dining table. Select **Dine-in** and a table when serving a seated guest, or **Delivery** for deliveries. An old empty/tableless dine-in draft reopens as Takeaway.
+New register drafts start as **Takeaway**. Tables are optional for sales, including **Dine-in**: leave **No table (optional)** selected when a table is not needed. Select a table when you want to track a seated guest, or **Delivery** for deliveries. Saved drafts and held bills retain their selected service type, including dine-in without a table. Dine-in service charges still use the configured rate even when no table is selected.
 
 After a payment or credit entry is successfully saved and its receipt opens, the register clears for the next guest. Cancelling the print dialog does not undo the sale. The saved order, receipt and remaining payment balance stay available in Orders and Sales history. A cancelled or failed payment does not clear the saved bill.
 

@@ -54,7 +54,7 @@ Record **Pass**, **Fail**, or **Not tested** and evidence/date. Use an isolated 
 
 | Test | Expected result | Result / evidence |
 | --- | --- | --- |
-| Counter sale | Takeaway sale completes without a table. A dining table is required only for Dine-in. | |
+| Counter sale | Both Takeaway and Dine-in sales complete without a table; selecting a table is optional. The selected service type and its charges are preserved. | |
 | Successful checkout | Sale/payment is saved; when the receipt opens the register is clear for the next guest. Cancelling printing does not undo the sale. | |
 | Cash and shift | Open shift, cash sale, refund/collection as permitted, and closing count reconcile. | |
 | Card / QR entry | Record only a payment independently verified through the actual terminal/bank. The POS does not charge a card or verify a provider payment automatically. | |

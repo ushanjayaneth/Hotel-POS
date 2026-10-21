@@ -300,7 +300,12 @@ function WorkspaceApp() {
     [],
   );
   useEffect(() => {
+    const checkForUpdate=()=>{
+      if(navigator.onLine===false||document.visibilityState!=='visible')return;
+      void navigator.serviceWorker?.getRegistration().then(registration=>registration?.update()).catch(()=>{});
+    };
     const update = registerSW({
+      immediate:true,
       onNeedRefresh() {
         setUpdateReady(true);
       },
@@ -309,6 +314,10 @@ function WorkspaceApp() {
       },
     });
     setUpdateWorker(() => update);
+    window.addEventListener('focus',checkForUpdate);
+    window.addEventListener('online',checkForUpdate);
+    document.addEventListener('visibilitychange',checkForUpdate);
+    return()=>{window.removeEventListener('focus',checkForUpdate);window.removeEventListener('online',checkForUpdate);document.removeEventListener('visibilitychange',checkForUpdate);};
   }, []);
   useEffect(() => {
     let active = true;
