@@ -14,6 +14,7 @@ import { listSystemPrinters, probeNetworkPrinter } from './peripherals';
 import {registerMediaRoutes} from './media';
 import {isProductImageReference} from '../shared/media';
 import { productCost, weightedUnitCost } from '../shared/costing';
+import { productStockState } from '../shared/stock';
 
 const command = z.string().min(8).max(160);
 const id = z.string().min(1).max(160);
@@ -48,7 +49,7 @@ export async function createApp(options: AppOptions = {}) {
   const openShift = (branchId:string) => store.list<Shift>('shift',branchId).find(x=>x.status==='open');
   const publicOrder = (user:User,order:Order):Order => {
     const visible = ['owner','manager','accountant'].includes(user.role) ? order : {...order,lines:order.lines.map(({unitCost:_cost,costBasis:_basis,...line})=>line)};
-    return user.role==='kitchen'?{...visible,customerId:null,subtotal:0,discount:0,tax:0,serviceCharge:0,total:0,paid:0,refunded:0,payments:[],lines:visible.lines.map(line=>({...line,unitPrice:0,lineTotal:0}))}:user.role==='waiter'?{...visible,payments:[]}:visible;
+    return user.role==='kitchen'?{...visible,customerId:null,subtotal:0,discount:0,cartDiscount:0,tax:0,serviceCharge:0,total:0,paid:0,refunded:0,payments:[],lines:visible.lines.map(line=>({...line,unitPrice:0,discount:0,lineTotal:0}))}:user.role==='waiter'?{...visible,payments:[]}:visible;
   };
   const ingredientStock = (branchId:string,key:string) => {
     const candidate=store.get<InventoryItem>('inventory',`${branchId}-${key}`)??store.get<InventoryItem>('inventory',key);
@@ -181,7 +182,8 @@ export async function createApp(options: AppOptions = {}) {
       audit:isManagement?store.list<AuditEvent>('audit',branchId).slice(-300).reverse():[],sync:syncState(user.role==='owner'?undefined:branchId),settings:settings(),serverTime:now(),
     };
     // The register sees live sellability even when its role cannot inspect costs or stores.
-    snapshot.menu=snapshot.menu.map(item=>({...item,enabled:item.available,available:menuAvailable(item,branchId)}));
+    const branchInventory=store.list<InventoryItem>('inventory',branchId), branchRecipes=store.list<Recipe>('recipe');
+    snapshot.menu=snapshot.menu.map(item=>{const stock=productStockState(item,branchInventory,branchRecipes,branchId);return {...item,reorderLevel:item.reorderLevel??stock.threshold,enabled:item.available,available:menuAvailable(item,branchId),stockQuantity:stock.quantity,lowStock:stock.low};});
     if(user.role==='accountant')snapshot.production=store.list<ProductionBatch>('production',branchId).reverse();
     snapshot.orders=snapshot.orders.map(order=>publicOrder(user,order));
     if(user.role==='waiter')snapshot.customers=snapshot.customers.map(customer=>({...customer,spent:0,balance:0,points:0}));
@@ -192,7 +194,7 @@ export async function createApp(options: AppOptions = {}) {
   app.post('/api/orders',async request=>{
     const user=getUser(request);permit(user,sales);
     const body=draftSchema.extend({heldBillId:id.optional(),expectedHeldUpdatedAt:z.iso.datetime().optional()}).parse(request.body);
-    scoped(user,body.branchId);if(body.discount>0)permit(user,management);
+    scoped(user,body.branchId);if(body.discount>0||body.lines.some(line=>line.discount>0))permit(user,management);
     return store.command(body.commandId,user.id,'order.create',body.branchId,body,()=>{
       if(body.heldBillId){const held=store.get<HeldBillRecord>('held',body.heldBillId);requireThat(held&&held.branchId===body.branchId,'Held bill not found in this branch.',404);requireThat(held.status==='held','This held bill was already resumed or discarded.',409,'HELD_BILL_CLOSED');requireThat(body.expectedHeldUpdatedAt===held.updatedAt,'This held bill changed on another device. Reload it before confirming the order.',409,'HELD_BILL_CONFLICT');}
       requireThat(body.type==='dine-in'||!body.tableId,'A table can only be assigned to a dine-in order.');
@@ -204,14 +206,18 @@ export async function createApp(options: AppOptions = {}) {
       const number=`${branch.code}-${businessDate.replaceAll('-','')}-${String(seq).padStart(4,'0')}`;
       const lines=body.lines.map(x=>{
         const item=store.get<MenuItem>('menu',x.menuItemId);requireThat(item&&item.available,'A selected menu item is unavailable.',409,'ITEM_UNAVAILABLE');
+        const gross=item.price*x.quantity;requireThat(Number.isSafeInteger(gross)&&gross>0,'The calculated product amount is invalid.',409);
+        requireThat(x.discount<=gross,'A product discount cannot exceed its line amount.');
         const cost=productCost(item,store.list<InventoryItem>('inventory',body.branchId),store.list<Recipe>('recipe'),body.branchId);
         requireThat(Number.isSafeInteger(cost.unitCost)&&cost.unitCost>=0&&Number.isSafeInteger(cost.unitCost*x.quantity),'The calculated unit cost is invalid.',409);
         consume(user,body.branchId,item,x.quantity,number);
-        return {id:uid('line'),menuItemId:item.id,name:item.name,nameSi:item.nameSi,quantity:x.quantity,unitPrice:item.price,unitCost:cost.unitCost,costBasis:cost.complete?'captured' as const:'estimated' as const,lineTotal:item.price*x.quantity,note:x.note};
+        return {id:uid('line'),menuItemId:item.id,name:item.name,nameSi:item.nameSi,quantity:x.quantity,unitPrice:item.price,unitCost:cost.unitCost,costBasis:cost.complete?'captured' as const:'estimated' as const,discount:x.discount,lineTotal:gross-x.discount,note:x.note};
       });
-      const subtotal=lines.reduce((sum,x)=>sum+x.lineTotal,0);requireThat(body.discount<=subtotal,'Discount cannot exceed the subtotal.');
-      const cfg=settings();const taxable=subtotal-body.discount;const serviceCharge=body.type==='dine-in'?Math.round(taxable*cfg.serviceChargeRate/100):0;const tax=Math.round((taxable+serviceCharge)*cfg.taxRate/100);
-      const order:Order={id:orderId,number,branchId:body.branchId,type:body.type,tableId:body.tableId??null,customerId:body.customerId??null,status:'new',paymentStatus:'unpaid',subtotal,discount:body.discount,tax,serviceCharge,total:taxable+serviceCharge+tax,paid:0,refunded:0,note:body.note??'',createdAt:now(),updatedAt:now(),createdBy:user.id,version:1,lines,payments:[]};
+      const subtotal=lines.reduce((sum,x)=>sum+x.unitPrice*x.quantity,0);const itemDiscount=lines.reduce((sum,x)=>sum+x.discount,0);
+      requireThat(Number.isSafeInteger(subtotal)&&subtotal<=1_000_000_000,'Order subtotal exceeds the allowed limit.');
+      requireThat(body.discount<=subtotal-itemDiscount,'Cart discount cannot exceed the amount after product discounts.');
+      const cfg=settings();const taxable=subtotal-itemDiscount-body.discount;const serviceCharge=body.type==='dine-in'?Math.round(taxable*cfg.serviceChargeRate/100):0;const tax=Math.round((taxable+serviceCharge)*cfg.taxRate/100);
+      const order:Order={id:orderId,number,branchId:body.branchId,type:body.type,tableId:body.tableId??null,customerId:body.customerId??null,status:'new',paymentStatus:taxable+serviceCharge+tax===0?'paid':'unpaid',subtotal,discount:itemDiscount+body.discount,cartDiscount:body.discount,tax,serviceCharge,total:taxable+serviceCharge+tax,paid:0,refunded:0,note:body.note??'',createdAt:now(),updatedAt:now(),createdBy:user.id,version:1,lines,payments:[]};
       requireThat(Number.isSafeInteger(order.total)&&order.total<=1_000_000_000,'Order total exceeds the allowed limit.');
       store.put('order',order);
       if(body.heldBillId){const held=store.get<HeldBillRecord>('held',body.heldBillId)!;store.put('held',{...held,status:'resumed' as const,resumedOrderId:order.id,updatedAt:now()});}
@@ -284,13 +290,13 @@ export async function createApp(options: AppOptions = {}) {
     return store.command(body.commandId,user.id,'inventory.adjust',body.branchId,body,()=>{const item=store.get<InventoryItem>('inventory',body.itemId);requireThat(item&&item.branchId===body.branchId,'Stock item not found in this branch.',404);moveStock(user,item,body.quantity,'adjustment',body.reason);audit(user,body.branchId,'stock.adjusted',`${item.name} · ${body.quantity} · ${body.reason}`);return {ok:true};});
   });
   app.post('/api/inventory',async request=>{
-    const user=getUser(request);permit(user,stores);const body=z.object({commandId:command.optional(),branchId:id,name:z.string().trim().min(2).max(120),nameSi:z.string().max(160).default(''),category:z.enum(['ingredient','prepared','packaging','resale']),unit:z.string().trim().min(1).max(30),quantity:z.number().finite().min(0).max(100000).default(0),minimum:z.number().finite().min(0).max(100000).default(0),unitCost:money,supplierId:id.nullish(),menuItemId:id.nullish()}).parse(request.body);scoped(user,body.branchId);
+    const user=getUser(request);permit(user,stores);const body=z.object({commandId:command.optional(),branchId:id,name:z.string().trim().min(2).max(120),nameSi:z.string().max(160).default(''),category:z.enum(['ingredient','prepared','packaging','resale']),unit:z.string().trim().min(1).max(30),quantity:z.number().finite().min(0).max(100000).default(0),minimum:z.number().finite().min(0).max(100000).optional(),unitCost:money,supplierId:id.nullish(),menuItemId:id.nullish()}).parse(request.body);scoped(user,body.branchId);
     return store.command(body.commandId??uid('command'),user.id,'inventory.create',body.branchId,body,()=>{
       if(body.supplierId)requireThat(store.get('supplier',body.supplierId),'Supplier not found.',404);
       if(body.menuItemId){requireThat(store.get('menu',body.menuItemId),'Menu item not found.',404);if(['prepared','resale'].includes(body.category))requireThat(!store.list<InventoryItem>('inventory',body.branchId).some(x=>['prepared','resale'].includes(x.category)&&x.menuItemId===body.menuItemId),'Linked sale stock already exists for this menu item.',409);}
       const canonical=body.name.normalize('NFKD').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,60)||uid('item');
       requireThat(!store.get('inventory',`${body.branchId}-${canonical}`),'A stock item with this name already exists in this branch.',409);
-      const item:InventoryItem={id:`${body.branchId}-${canonical}`,branchId:body.branchId,name:body.name,nameSi:body.nameSi||body.name,category:body.category,unit:body.unit,quantity:0,minimum:body.minimum,unitCost:body.unitCost,supplierId:body.supplierId??null,menuItemId:body.menuItemId??null,updatedAt:now()};store.put('inventory',item);if(body.quantity)moveStock(user,item,body.quantity,'opening','Opening stock');audit(user,body.branchId,'stock.item_created',body.name);return {ok:true,item:store.get('inventory',item.id)};
+      const item:InventoryItem={id:`${body.branchId}-${canonical}`,branchId:body.branchId,name:body.name,nameSi:body.nameSi||body.name,category:body.category,unit:body.unit,quantity:0,minimum:body.minimum??(body.menuItemId?5:0),unitCost:body.unitCost,supplierId:body.supplierId??null,menuItemId:body.menuItemId??null,updatedAt:now()};store.put('inventory',item);if(body.quantity)moveStock(user,item,body.quantity,'opening','Opening stock');audit(user,body.branchId,'stock.item_created',body.name);return {ok:true,item:store.get('inventory',item.id)};
     });
   });
   app.patch('/api/inventory/:id',async request=>{
@@ -341,7 +347,7 @@ export async function createApp(options: AppOptions = {}) {
   const requireProductPhoto=(image?:string)=>{if(image?.startsWith('/api/media/'))requireThat(store.get('media',image.slice('/api/media/'.length)),'Upload this product photo before saving the product.',404);};
   app.post('/api/menu',async request=>{
     const user=getUser(request);permit(user,management);const body=menuSchema.extend({commandId:command.optional()}).parse(request.body);const branchId=user.branchId??'b1';requireProductPhoto(body.image);
-    return store.command(body.commandId??uid('command'),user.id,'menu.create',branchId,body,()=>{requireThat(store.get('category',body.categoryId),'Category not found.',404);validateMenuCodes(store,body);const {commandId,...data}=body;const item:MenuItem={...data,id:uid('menu'),nameSi:data.nameSi||data.name};store.put('menu',item);audit(user,branchId,'menu.created',item.name);return {ok:true,item};});
+    return store.command(body.commandId??uid('command'),user.id,'menu.create',branchId,body,()=>{requireThat(store.get('category',body.categoryId),'Category not found.',404);validateMenuCodes(store,body);const {commandId,...data}=body;const item:MenuItem={...data,id:uid('menu'),nameSi:data.nameSi||data.name,reorderLevel:data.reorderLevel??5};store.put('menu',item);audit(user,branchId,'menu.created',item.name);return {ok:true,item};});
   });
   app.patch('/api/menu/:id',async request=>{
     const user=getUser(request);permit(user,management);const params=z.object({id}).parse(request.params);const body=menuSchema.partial().extend({commandId:command.optional()}).parse(request.body);const branchId=user.branchId??'b1';requireProductPhoto(body.image);

@@ -81,6 +81,29 @@ test('offline stock counts reject stale edits and receiving invoices updates wei
   } finally { await db.delete(); }
 });
 
+test('offline product alerts default to five while explicit thresholds and zero survive partial edits', async () => {
+  const { db, call } = await fixture();
+  try {
+    const defaults = (await call('POST', '/menu', product('Default alert product'))).item as MenuItem;
+    assert.equal(defaults.reorderLevel, 5);
+    const defaultStock = await call('POST', '/inventory', { branchId: 'b1', name: 'Default alert stock', category: 'resale', unit: 'pcs', unitCost: 100, menuItemId: defaults.id });
+    assert.equal(defaultStock.item.minimum, 5);
+
+    const custom = (await call('POST', '/menu', product('Custom alert product', { reorderLevel: 12 }))).item as MenuItem;
+    const partial = (await call('PATCH', `/menu/${custom.id}`, { price: 17000 })).item as MenuItem;
+    assert.equal(partial.reorderLevel, 12);
+    const customStock = await call('POST', '/inventory', { branchId: 'b1', name: 'Custom alert stock', category: 'prepared', unit: 'portions', unitCost: 100, menuItemId: custom.id });
+    assert.equal(customStock.item.minimum, 12);
+
+    const zero = (await call('POST', '/menu', product('Zero alert product', { reorderLevel: 0 }))).item as MenuItem;
+    assert.equal((await call('PATCH', `/menu/${zero.id}`, { cost: 4000 })).item.reorderLevel, 0);
+    const zeroStock = await call('POST', '/inventory', { branchId: 'b1', name: 'Zero alert stock', category: 'resale', unit: 'pcs', unitCost: 100, menuItemId: zero.id, minimum: 0 });
+    assert.equal(zeroStock.item.minimum, 0);
+    const ingredient = await call('POST', '/inventory', { branchId: 'b1', name: 'Unlinked flour', category: 'ingredient', unit: 'kg', unitCost: 100 });
+    assert.equal(ingredient.item.minimum, 0);
+  } finally { await db.delete(); }
+});
+
 test('offline production rolls back every ingredient and movement when one ingredient is insufficient', async () => {
   const { db, store, call } = await fixture();
   try {

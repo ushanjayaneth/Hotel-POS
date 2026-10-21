@@ -2134,3 +2134,5 @@
     animation: enter 0.2s ease;
   }
 }
+
+.product-card.low-stock,.product-card.low-stock:hover,.product-card.low-stock.in-cart{border-color:#ef9b45;box-shadow:0 0 0 0.2px #ef9b4544}.product-info .product-low-stock{display:block;color:#efad69;font-size:9px;margin-top:8px;font-weight:500}.line-discount-button{display:flex;align-items:center;gap:5px;color:#c2cfb9;font-size:9px;margin-top:8px;background:transparent;border:0;padding:0}.line-discount-note{display:block;color:#b0d898;font-size:9px;margin-top:6px}.credit-sale-button{width:100%;justify-content:flex-start;border:1px solid #d6bf8a30;background:#d6bf8a08;font-size:10px;min-height:34px;margin-top:7px}.credit-sale-button>span{margin-left:auto;color:var(--muted);font-size:9px;max-width:48%;overflow:hidden;text-overflow:ellipsis}.pos-add-customer{flex-shrink:0}.customer-choice-tabs{display:flex;gap:7px;margin-bottom:20px}.customer-choice-tabs .button{font-size:11px;flex:1}.order-customer-row .customer-select{min-width:0}

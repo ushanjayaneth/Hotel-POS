@@ -35,7 +35,8 @@ import {
 import type { CartLine, MenuItem, Order } from "../../shared/types";
 import { usePOS } from "../lib/context";
 import { browserDb } from "../lib/db";
-import { commandId, money, time } from "../lib/format";
+import { commandId, money, number, time } from "../lib/format";
+import {productStockState} from '../../shared/stock';
 import { Modal, StatusBadge } from "../components/ui";
 import { useBackLayer } from "../lib/navigation";
 import { useDevicePreferences, type ShortcutAction } from "../lib/preferences";
@@ -64,7 +65,7 @@ export default function POS({
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState("featured");
   const [lines, setLines] = useState<CartLine[]>([]);
-  const [type, setType] = useState<Order["type"]>("dine-in");
+  const [type, setType] = useState<Order["type"]>("takeaway");
   const [tableId, setTableId] = useState("");
   const [customerId, setCustomerId] = useState("");
   const [note, setNote] = useState("");
@@ -76,6 +77,10 @@ export default function POS({
   const [paymentOrder, setPaymentOrder] = useState<string | null>(null);
   const [noteDialog, setNoteDialog] = useState(false);
   const [discountDialog, setDiscountDialog] = useState(false);
+  const [itemDiscount, setItemDiscount] = useState<string|null>(null);
+  const [creditCustomerDialog,setCreditCustomerDialog]=useState(false);
+  const [addCustomerDialog,setAddCustomerDialog]=useState(false);
+  const [paymentMethod,setPaymentMethod]=useState<'cash'|'credit'>('cash');
   const [mobileCart, setMobileCart] = useState(false);
   const [heldBillId, setHeldBillId] = useState("");
   const [heldBillUpdatedAt, setHeldBillUpdatedAt] = useState("");
@@ -107,7 +112,7 @@ export default function POS({
       .then((draft) => {
         if (!active) return;
         setLines(draft?.lines || []);
-        setType(draft?.type || "dine-in");
+        setType(draft?.type === 'dine-in' && draft.tableId ? 'dine-in' : draft?.type === 'delivery' ? 'delivery' : 'takeaway');
         setTableId(draft?.tableId || "");
         setCustomerId(draft?.customerId || "");
         setHeldBillId(draft?.heldBillId || "");
@@ -126,7 +131,7 @@ export default function POS({
           );
           if (bill) {
             setLines(bill.lines);
-            setType(bill.type);
+            setType(bill.type==='dine-in'&&!bill.tableId?'takeaway':bill.type);
             setTableId(bill.tableId || "");
             setCustomerId(bill.customerId || "");
             setNote(bill.note);
@@ -222,7 +227,11 @@ export default function POS({
   const subtotal =
     activeOrder?.subtotal ??
     cart.reduce((sum, l) => sum + l.quantity * l.item.price, 0);
-  const actualDiscount = activeOrder?.discount ?? Math.min(discount, subtotal);
+  const saleLines = cart.map(line=>({menuItemId:line.menuItemId,quantity:line.quantity,note:line.note,discount:Math.min(Math.max(0,line.discount||0),line.item.price*line.quantity)}));
+  const itemDiscountTotal=activeOrder?activeOrder.lines.reduce((sum,line)=>sum+(line.discount||0),0):saleLines.reduce((sum,line)=>sum+line.discount,0);
+  const cartDiscount=activeOrder?(activeOrder.cartDiscount??Math.max(0,activeOrder.discount-itemDiscountTotal)):Math.min(discount,Math.max(0,subtotal-itemDiscountTotal));
+  const actualDiscount=itemDiscountTotal+cartDiscount;
+  const discountLine=cart.find(line=>line.menuItemId===itemDiscount);
   const serviceCharge =
     activeOrder?.serviceCharge ??
     (type === "dine-in"
@@ -260,7 +269,7 @@ export default function POS({
     setLines((previous) =>
       previous
         .map((l) =>
-          l.menuItemId === id ? { ...l, quantity: l.quantity + delta } : l,
+          l.menuItemId === id ? { ...l, quantity: l.quantity + delta,discount:Math.min(l.discount||0,Math.max(0,l.quantity+delta)*(data.menu.find(item=>item.id===id)?.price||0)) } : l,
         )
         .filter((l) => l.quantity > 0),
     );
@@ -272,6 +281,7 @@ export default function POS({
     setDiscount(0);
     setCustomerId("");
     setTableId("");
+    setType('takeaway');
     setHeldBillId("");
     setHeldBillUpdatedAt("");
     setOrderCommand(commandId());
@@ -284,9 +294,9 @@ export default function POS({
     }
     resetOrder();
   }
-  async function submit(pay = false) {
+  async function submit(pay = false,preferredMethod:'cash'|'credit'='cash',creditCustomerId?:string) {
     if (activeOrder) {
-      if (pay) setPaymentOrder(activeOrder.id);
+      if (pay) {setPaymentMethod(preferredMethod);setPaymentOrder(activeOrder.id);}
       return;
     }
     if (!lines.length) return;
@@ -302,13 +312,13 @@ export default function POS({
         branchId,
         type,
         tableId: type === "dine-in" ? tableId : null,
-        customerId: customerId || null,
+        customerId: creditCustomerId || customerId || null,
         ...(heldBillId
           ? { heldBillId, expectedHeldUpdatedAt: heldBillUpdatedAt }
           : {}),
         note,
-        discount: actualDiscount,
-        lines,
+        discount: cartDiscount,
+        lines:saleLines,
       });
       onSelectOrder(result.order.id);
       setLines([]);
@@ -318,7 +328,8 @@ export default function POS({
       setHeldBillId("");
       setHeldBillUpdatedAt("");
       notify(`Order ${result.order.number} sent to the kitchen.`);
-      if (pay) setPaymentOrder(result.order.id);
+      if(pay&&result.order.total===0){resetOrder();setMobileCart(false);onReceipt(result.order.id);}
+      else if (pay) {setPaymentMethod(preferredMethod);setPaymentOrder(result.order.id);}
     } catch (err) {
       notify((err as Error).message, "error");
     } finally {
@@ -383,8 +394,8 @@ export default function POS({
           tableId: type === "dine-in" ? tableId || null : null,
           customerId: customerId || null,
           note,
-          discount: actualDiscount,
-          lines,
+          discount: cartDiscount,
+          lines:saleLines,
           ...(heldBillId ? { expectedUpdatedAt: heldBillUpdatedAt } : {}),
         },
         heldBillId ? "PUT" : "POST",
@@ -622,10 +633,14 @@ export default function POS({
             {items.map((item) => {
               const count =
                 cart.find((l) => l.menuItemId === item.id)?.quantity || 0;
+              const state=productStockState(item,data.inventory,data.recipes,branchId);
+              const stock={...state,quantity:item.stockQuantity??state.quantity,low:item.lowStock??state.low};
+              const lowStock=data.settings.lowStockAlerts&&stock.low;
               return (
                 <article
-                  className={`product-card ${!item.available ? "unavailable" : ""} ${count ? "in-cart" : ""}`}
+                  className={`product-card ${lowStock?'low-stock':''} ${!item.available ? "unavailable" : ""} ${count ? "in-cart" : ""}`}
                   key={item.id}
+                  title={lowStock?`Low stock: ${number(stock.quantity??0)} remaining. Alert at ${number(stock.threshold)}.`:undefined}
                 >
                   <button
                     className="product-main"
@@ -655,6 +670,7 @@ export default function POS({
                     <div className="product-info">
                       <h3>{item.name}</h3>
                       <p>{item.description}</p>
+                      {lowStock&&<small className="product-low-stock">Low stock · {number(stock.quantity??0)} left</small>}
                     </div>
                   </button>
                   <div className="product-bottom">
@@ -811,6 +827,7 @@ export default function POS({
                 </option>
               ))}
             </select>
+            {!activeOrder&&<button type="button" className="icon-button pos-add-customer" aria-label="Add customer" title="Add customer for credit sales" onClick={()=>setAddCustomerDialog(true)}><Plus size={14}/></button>}
           </div>
           <div className="order-items-heading">
             <span>ITEM</span>
@@ -822,13 +839,14 @@ export default function POS({
                   const item = data.menu.find((i) => i.id === line.menuItemId);
                   return (
                     <div className="cart-line" key={line.id}>
-                      <img src={item?.image} alt="" />
+                      <ProductPhoto src={item?.image||''} alt="" />
                       <div className="cart-line-info">
                         <h4>{line.name}</h4>
                         <span>
                           {money(line.unitPrice)} <i>× {line.quantity}</i>
                         </span>
                         {line.note && <p>{line.note}</p>}
+                        {(line.discount||0)>0&&<small className="line-discount-note">Item discount − {money(line.discount||0)}</small>}
                       </div>
                       <strong>{money(line.lineTotal)}</strong>
                     </div>
@@ -836,7 +854,7 @@ export default function POS({
                 })
               : cart.map((line) => (
                   <div className="cart-line" key={line.menuItemId}>
-                    <img src={line.item.image} alt="" />
+                    <ProductPhoto src={line.item.image} alt="" />
                     <div className="cart-line-info">
                       <h4>{line.item.name}</h4>
                       <span>{money(line.item.price)}</span>
@@ -866,9 +884,10 @@ export default function POS({
                         </button>
                       </div>
                       {line.note && <p>{line.note}</p>}
+                      {canManageCatalog&&<button type="button" className="line-discount-button" aria-label={`Discount ${line.item.name}`} onClick={()=>setItemDiscount(line.menuItemId)}><Tag size={11}/>{line.discount?`− ${money(Math.min(line.discount,line.item.price*line.quantity))}`:'Item discount'}</button>}
                     </div>
                     <div className="cart-line-end">
-                      <strong>{money(line.item.price * line.quantity)}</strong>
+                      <strong>{money(Math.max(0,line.item.price * line.quantity-(line.discount||0)))}</strong>
                       <button
                         onClick={() =>
                           setLines((v) =>
@@ -915,8 +934,8 @@ export default function POS({
                   !["owner", "manager"].includes(data.user.role)
                 }
               >
-                <span className="discount-symbol">%</span>
-                {actualDiscount ? "Edit discount" : "Add discount"}
+                <Tag size={12}/>
+                {cartDiscount ? "Edit cart discount" : "Add cart discount"}
               </button>
             </div>
             {!activeOrder && lines.length > 0 && (
@@ -942,10 +961,11 @@ export default function POS({
                 <span>Subtotal</span>
                 <span>{money(subtotal)}</span>
               </div>
-              {actualDiscount > 0 && (
+              {itemDiscountTotal > 0 && <div className="text-mint"><span>Item discounts</span><span>− {money(itemDiscountTotal)}</span></div>}
+              {cartDiscount > 0 && (
                 <div className="text-mint">
-                  <span>Discount</span>
-                  <span>− {money(actualDiscount)}</span>
+                  <span>Cart discount</span>
+                  <span>− {money(cartDiscount)}</span>
                 </div>
               )}
               <div>
@@ -1020,6 +1040,7 @@ export default function POS({
                       : "Charge order"}
                   <ArrowRight size={16} />
                 </button>
+                {!activeOrder&&canTakePayment&&<button type="button" className="button credit-sale-button" disabled={busy||!lines.length||!data.sync.hubOnline} onClick={()=>{if(customerId)void submit(true,'credit');else setCreditCustomerDialog(true);}}><Users size={14}/>Sell on credit<span>{customerId?data.customers.find(customer=>customer.id===customerId)?.name:'Select customer'}</span></button>}
                 {!activeOrder && (
                   <button
                     className="button send-kitchen-button"
@@ -1057,13 +1078,13 @@ export default function POS({
       {paymentOrder && (
         <PaymentDialog
           orderId={paymentOrder}
+          initialMethod={paymentMethod}
           onClose={() => setPaymentOrder(null)}
           onPaid={(id) => {
             setPaymentOrder(null);
             setMobileCart(false);
+            resetOrder();
             onReceipt(id);
-            const paidOrder = data.orders.find((o) => o.id === id);
-            if (paidOrder?.type !== "dine-in") onSelectOrder(null);
           }}
         />
       )}
@@ -1237,8 +1258,8 @@ export default function POS({
       )}
       {discountDialog && (
         <DiscountDialog
-          subtotal={subtotal}
-          discount={discount}
+          subtotal={Math.max(0,subtotal-itemDiscountTotal)}
+          discount={cartDiscount}
           onClose={() => setDiscountDialog(false)}
           onSave={(value) => {
             setDiscount(value);
@@ -1246,16 +1267,39 @@ export default function POS({
           }}
         />
       )}
+      {discountLine&&<DiscountDialog key={discountLine.menuItemId} title="Item discount" subtitle={`${discountLine.item.name} · Amount applies to all ${discountLine.quantity} units on this line.`} subtotal={discountLine.item.price*discountLine.quantity} discount={discountLine.discount||0} onClose={()=>setItemDiscount(null)} onSave={value=>{setLines(previous=>previous.map(line=>line.menuItemId===discountLine.menuItemId?{...line,discount:value}:line));setItemDiscount(null);}}/>}
+      {(addCustomerDialog||creditCustomerDialog)&&<POSCustomerDialog credit={creditCustomerDialog} onClose={()=>{setAddCustomerDialog(false);setCreditCustomerDialog(false);}} onSelected={id=>{setCustomerId(id);setAddCustomerDialog(false);setCreditCustomerDialog(false);if(creditCustomerDialog)void submit(true,'credit',id);}}/>}
     </>
   );
 }
 
+function POSCustomerDialog({credit,onClose,onSelected}:{credit:boolean;onClose:()=>void;onSelected:(id:string)=>void}){
+  const {data,mutate,notify}=usePOS();
+  const [creating,setCreating]=useState(!credit||data.customers.length===0);
+  const [selected,setSelected]=useState('');const [busy,setBusy]=useState(false);const [error,setError]=useState('');
+  const [requestId]=useState(commandId);
+  const customer=data.customers.find(item=>item.id===selected);
+  return <Modal title={credit?'Customer credit sale':'Add customer'} subtitle={credit?'Choose a customer account or create one before confirming this credit sale.':'Save customer details for sales and outstanding dues.'} onClose={()=>busy?false:onClose()}>
+    <form onSubmit={async event=>{event.preventDefault();if(busy)return;if(!creating){if(selected)onSelected(selected);return;}setBusy(true);setError('');const fields=new FormData(event.currentTarget);try{const result=await mutate<{customer:{id:string;name:string}}>('/customers',{commandId:requestId,name:String(fields.get('name')||'').trim(),phone:String(fields.get('phone')||'').trim(),email:String(fields.get('email')||'').trim()});notify(`Customer ${result.customer.name} added.`);onSelected(result.customer.id);}catch(cause){setError((cause as Error).message);setBusy(false);}}}>
+      {credit&&data.customers.length>0&&<div className="customer-choice-tabs"><button type="button" className={`button ${!creating?'button-primary':'button-ghost'}`} onClick={()=>setCreating(false)} disabled={busy}>Existing customer</button><button type="button" className={`button ${creating?'button-primary':'button-ghost'}`} onClick={()=>setCreating(true)} disabled={busy}>New customer</button></div>}
+      {creating?<div className="form-grid"><label className="field"><span>Customer name</span><input className="input" name="name" required minLength={2} maxLength={120} autoComplete="name" disabled={busy}/></label><label className="field"><span>Phone number</span><input className="input" name="phone" type="tel" required minLength={5} maxLength={30} autoComplete="tel" disabled={busy}/></label><label className="field full"><span>Email (optional)</span><input className="input" name="email" type="email" maxLength={254} autoComplete="email" disabled={busy}/></label></div>:<><label className="field"><span>Customer account</span><select className="select" required value={selected} onChange={event=>setSelected(event.target.value)}><option value="">Choose customer</option>{data.customers.map(item=><option key={item.id} value={item.id}>{item.name} · {item.phone}</option>)}</select></label>{customer&&<div className="credit-customer-summary"><Users size={19}/><div><strong>{customer.name}</strong><small>{customer.phone}</small><span>Current outstanding: {money(customer.balance)}</span></div></div>}</>}
+      {error&&<p className="error-message" role="alert">{error}</p>}
+      <p className="held-bill-note">{credit?'The next step confirms the credit amount. This does not record cash received; repayments are recorded in Customers & dues.':'Select this customer on future bills to record credit sales and repayments.'}</p>
+      <div className="form-actions"><button type="button" className="button button-ghost" disabled={busy} onClick={onClose}>Cancel</button><button className="button button-primary" disabled={busy||!creating&&!selected}>{busy?'Saving customer…':credit?'Continue to credit sale':'Add customer'}</button></div>
+    </form>
+  </Modal>;
+}
+
 function DiscountDialog({
+  title='Cart discount',
+  subtitle='Enter a rupee amount. Discounts are recorded against your staff account.',
   subtotal,
   discount,
   onClose,
   onSave,
 }: {
+  title?:string;
+  subtitle?:string;
   subtotal: number;
   discount: number;
   onClose: () => void;
@@ -1264,8 +1308,8 @@ function DiscountDialog({
   const [value, setValue] = useState((discount / 100).toString());
   return (
     <Modal
-      title="Order discount"
-      subtitle="Discounts are recorded against your staff account."
+      title={title}
+      subtitle={subtitle}
       onClose={onClose}
     >
       <form
@@ -1303,10 +1347,12 @@ function DiscountDialog({
 }
 
 export function PaymentDialog({
+  initialMethod='cash',
   orderId,
   onClose,
   onPaid,
 }: {
+  initialMethod?:'cash'|'credit';
   orderId: string;
   onClose: () => void;
   onPaid: (id: string) => void;
@@ -1314,7 +1360,7 @@ export function PaymentDialog({
   const { data, mutate, notify } = usePOS();
   const order = data.orders.find((o) => o.id === orderId);
   const [method, setMethod] = useState<"cash" | "card" | "qr" | "credit">(
-    "cash",
+    initialMethod,
   );
   const due = order ? Math.max(0, order.total - order.paid) : 0;
   const [amount, setAmount] = useState((due / 100).toString());

@@ -22,6 +22,9 @@ This repository contains a working local evaluation version of DEMO HOTEL. It is
 - Owner-only password-encrypted worker backups, validation/preview before replacement, session exclusion/invalidation, new device identity on restore, and recoverable draft import.
 - Local uploaded product photos, pre-save JPEG compression to at most 700,000 bytes, offline display, and authenticated same-origin hub copy retries without deleting original bytes.
 - Recipe batch yields and packaging, weighted purchase/production cost, unit costs captured on confirmed order lines, daily/product profitability, and profit CSV export. Historical lines without saved cost are marked as estimates.
+- Per-product low-stock thresholds with default 5, branch-specific quantities and recipe portions, and orange POS card outlines at the threshold.
+- Fixed LKR discounts on individual product lines and the whole cart, with permission checks, held-bill persistence, receipt breakdown and preserved cost/stock quantities.
+- Tableless counter sales by default, register reset after a saved payment/receipt, and POS customer creation/selection for credit sales with item-level debt history and partial repayments.
 
 ## Required before a live single-branch pilot
 

@@ -374,6 +374,8 @@ test('a POS category and barcoded product can be held, updated, sold on credit a
   const ledger=page.getByRole('dialog',{name:'Customer ledger & collection',exact:true});
   await expect(ledger.getByRole('spinbutton',{name:'Amount received (LKR)',exact:true})).toHaveValue('45.75');
   await ledger.getByRole('textbox',{name:'Note (optional)',exact:true}).fill('Browser collection');
+  await expect(ledger.getByRole('textbox',{name:'Note (optional)',exact:true})).toHaveValue('Browser collection');
+  await expect(ledger.getByRole('spinbutton',{name:'Amount received (LKR)',exact:true})).toHaveValue('45.75');
   await ledger.getByRole('button',{name:'Record collection',exact:true}).click();
   await expect(ledger).toHaveCount(0);
   const collected=await snapshot(page);

@@ -10,6 +10,10 @@ On a static HTTPS deployment such as Vercel, choose **Set up this device** and c
 
 Each device workspace is independent; bills and stock do not automatically merge with other devices or Firebase. Use the branch hub for shared cashier/kitchen data. Export encrypted `.hotelbackup` files from Settings and keep copies off-device. There is no app-imposed total-record cap or automatic deletion, but browser quotas and site-data clearing still apply. See the [device workspace guide](docs/DEVICE-WORKSPACE.md) for setup, backup/restore, photos, and food costing.
 
+See [register sales and customer dues](docs/POS-SALES.md) for per-product low-stock alerts, item/cart discounts in LKR, tableless counter sales, POS credit customers, and partial repayments.
+
+For customer delivery, complete the [handover and acceptance record](docs/CUSTOMER-HANDOVER.md) and provide the [owner quick start](docs/OWNER-QUICK-START.md) with the installation's agreed backup and support details.
+
 ## Run locally
 
 Install **Node.js 24.14 or later**. The hub uses Node's built-in SQLite module.

@@ -59,6 +59,9 @@ export interface MenuItem {
   barcode?: string;
   sku?: string;
   reorderLevel?: number;
+  /** Branch-specific sellable quantity derived for register roles; never a stock write input. */
+  stockQuantity?: number | null;
+  lowStock?: boolean;
   stockMode: "prepared" | "recipe" | "untracked";
   badge?: string;
   preparationMinutes: number;
@@ -84,6 +87,8 @@ export interface OrderLine {
   /** Cost per sold unit, in minor currency units, frozen when the bill is confirmed. */
   unitCost?: number;
   costBasis?: "captured" | "estimated";
+  /** Total fixed discount for this line's entire quantity, in minor currency units. */
+  discount?: number;
   lineTotal: number;
   note: string;
 }
@@ -107,7 +112,10 @@ export interface Order {
   status: OrderStatus;
   paymentStatus: "unpaid" | "partial" | "paid" | "refunded";
   subtotal: number;
+  /** Combined line discounts and cart discount, deducted once from gross subtotal. */
   discount: number;
+  /** Cart-only discount. Legacy bills without this field use discount as their cart discount. */
+  cartDiscount?: number;
   tax: number;
   serviceCharge: number;
   total: number;
@@ -341,6 +349,8 @@ export interface CartLine {
   menuItemId: string;
   quantity: number;
   note: string;
+  /** Total fixed discount for the complete product line, in minor currency units. */
+  discount?: number;
 }
 export interface CreateOrderInput {
   commandId: string;

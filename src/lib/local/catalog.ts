@@ -24,7 +24,7 @@ const menuSchema = z.object({
   name: z.string().trim().min(2).max(120), nameSi: z.string().max(160).default(''), description: z.string().max(500).default(''), categoryId: id,
   price: positiveMoney, cost: money.default(0), image: z.string().max(500).refine(isProductImageReference, 'Choose a photo link or upload a product photo.'),
   available: z.boolean().default(true), stockMode: z.enum(['prepared', 'recipe', 'untracked']), badge: z.string().max(30).optional(), preparationMinutes: z.number().int().min(0).max(180).default(10),
-  barcode: z.string().trim().max(80).regex(/^[A-Za-z0-9 ._/-]*$/).optional(), sku: z.string().trim().max(80).regex(/^[A-Za-z0-9 ._/-]*$/).transform(value => value.toUpperCase()).optional(), reorderLevel: stockQuantity.optional(),
+  barcode: z.string().trim().max(80).regex(/^[A-Za-z0-9 ._/-]*$/).optional(), sku: z.string().trim().max(80).regex(/^[A-Za-z0-9 ._/-]*$/).transform(value => value.toUpperCase()).optional(), reorderLevel: stockQuantity.default(5),
 });
 
 async function audit(request: LocalRequest, branchId: string, action: string, detail: string) {
@@ -146,17 +146,20 @@ export async function handleCatalog(request: LocalRequest): Promise<unknown | un
 
   if (path === '/inventory' && method === 'POST') {
     permitLocal(user, stores);
-    const body = z.object({ commandId: command, branchId: id, name: z.string().trim().min(2).max(120), nameSi: z.string().max(160).default(''), category: z.enum(['ingredient', 'prepared', 'packaging', 'resale']), unit: z.string().trim().min(1).max(30), quantity: stockQuantity.default(0), minimum: stockQuantity.default(0), unitCost: money, supplierId: id.nullish(), menuItemId: id.nullish() }).parse(request.body);
+    const body = z.object({ commandId: command, branchId: id, name: z.string().trim().min(2).max(120), nameSi: z.string().max(160).default(''), category: z.enum(['ingredient', 'prepared', 'packaging', 'resale']), unit: z.string().trim().min(1).max(30), quantity: stockQuantity.default(0), minimum: stockQuantity.optional(), unitCost: money, supplierId: id.nullish(), menuItemId: id.nullish() }).parse(request.body);
     await scopeLocal(store, user, body.branchId);
     if (body.supplierId) requireLocal(await store.get('supplier', body.supplierId), 'Supplier not found.', 404);
+    let linkedProduct: MenuItem | undefined;
     if (body.menuItemId) {
-      requireLocal(await store.get('menu', body.menuItemId), 'Menu item not found.', 404);
+      linkedProduct = await store.get<MenuItem>('menu', body.menuItemId);
+      requireLocal(linkedProduct, 'Menu item not found.', 404);
       if (['prepared', 'resale'].includes(body.category)) requireLocal(!(await store.list<InventoryItem>('inventory', body.branchId)).some(item => ['prepared', 'resale'].includes(item.category) && item.menuItemId === body.menuItemId), 'Linked sale stock already exists for this menu item.', 409);
     }
     const canonical = body.name.normalize('NFKD').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || uid('item');
     const stockId = `${body.branchId}-${canonical}`;
     requireLocal(!await store.get('inventory', stockId), 'A stock item with this name already exists in this branch.', 409);
-    let item: InventoryItem = { id: stockId, branchId: body.branchId, name: body.name, nameSi: body.nameSi || body.name, category: body.category, unit: body.unit, quantity: 0, minimum: body.minimum, unitCost: body.unitCost, supplierId: body.supplierId ?? null, menuItemId: body.menuItemId ?? null, updatedAt: now() };
+    const minimum = body.minimum ?? (linkedProduct && ['prepared', 'resale'].includes(body.category) ? linkedProduct.reorderLevel ?? 5 : 0);
+    let item: InventoryItem = { id: stockId, branchId: body.branchId, name: body.name, nameSi: body.nameSi || body.name, category: body.category, unit: body.unit, quantity: 0, minimum, unitCost: body.unitCost, supplierId: body.supplierId ?? null, menuItemId: body.menuItemId ?? null, updatedAt: now() };
     await store.put('inventory', item);
     if (body.quantity) item = await moveStock(request, item, body.quantity, 'opening', 'Opening stock');
     await audit(request, body.branchId, 'stock.item_created', body.name);

@@ -126,17 +126,10 @@ function Modal({
     };
     document.addEventListener("keydown", fn);
     const previous = document.activeElement as HTMLElement | null;
-    const handle = setTimeout(
-      () =>
-        document
-          .querySelector<HTMLElement>(
-            ".management-modal input, .management-modal select",
-          )
-          ?.focus(),
-      50,
-    );
+    document.querySelector<HTMLElement>(
+      ".management-modal input, .management-modal select",
+    )?.focus();
     return () => {
-      clearTimeout(handle);
       document.removeEventListener("keydown", fn);
       previous?.focus();
     };
@@ -4170,6 +4163,7 @@ export default function Management({ page }: { page: Page }) {
                                   : "Credit refund"}
                             </Pill>
                             <small>{entry.note || entry.method}</small>
+                            {entry.type==='sale'&&entry.orderId&&<small className="customer-credit-items">Bill items: {data.orders.find(order=>order.id===entry.orderId)?.lines.map(line=>`${line.name} × ${line.quantity} (${money(line.lineTotal)})`).join(' · ')||'Historical bill details unavailable'}</small>}
                           </div>
                         </td>
                         <td>

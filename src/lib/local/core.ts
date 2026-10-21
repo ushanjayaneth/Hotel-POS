@@ -8,6 +8,7 @@ import {handleCashier} from './cashier';
 import {handleCatalog} from './catalog';
 import {handleMedia} from './media';
 import {LocalError, localStorageError, now, requireLocal, scopeLocal, sha256, stable, uid, type LocalRequest} from './types';
+import {productStockState} from '../../../shared/stock';
 
 export {getLocalUser, getLocalWorkspaceInfo, initializeLocalWorkspace};
 export type {LocalWorkspaceInfo} from './types';
@@ -20,7 +21,7 @@ const changed = () => {if (typeof window !== 'undefined') {window.dispatchEvent(
 
 function publicOrder(user: User, order: Order): Order {
   const lines=['owner','manager','accountant'].includes(user.role)?order.lines:order.lines.map(({unitCost:_,costBasis:__,...line})=>line);
-  if (user.role === 'kitchen') return {...order,customerId:null,subtotal:0,discount:0,tax:0,serviceCharge:0,total:0,paid:0,refunded:0,payments:[],lines:lines.map(line=>({...line,unitPrice:0,lineTotal:0}))};
+  if (user.role === 'kitchen') return {...order,customerId:null,subtotal:0,discount:0,cartDiscount:0,tax:0,serviceCharge:0,total:0,paid:0,refunded:0,payments:[],lines:lines.map(line=>({...line,unitPrice:0,discount:0,lineTotal:0}))};
   return {...order,lines,...(user.role==='waiter'?{payments:[]}:{})};
 }
 async function bootstrap(store: LocalStore, user: User, query: URLSearchParams): Promise<Snapshot> {
@@ -48,7 +49,7 @@ async function bootstrap(store: LocalStore, user: User, query: URLSearchParams):
   const balance = (customerId: string) => credits.filter(entry=>entry.customerId===customerId).reduce((sum,entry)=>sum+(entry.type==='sale'?entry.amount:-entry.amount),0);
   return {
     user,branches:branches.filter(branch=>user.role==='owner'||branch.id===user.branchId),branch:branches.find(branch=>branch.id===branchId)!,categories,
-    menu:menu.map(item=>({...item,cost:maySeeCosts?item.cost:0,enabled:item.available,available:sellable(item)})),recipes:isStore?recipes:[],tables,
+    menu:menu.map(item=>{const stock=productStockState(item,inventory,recipes,branchId);return {...item,reorderLevel:item.reorderLevel??stock.threshold,cost:maySeeCosts?item.cost:0,enabled:item.available,available:sellable(item),stockQuantity:stock.quantity,lowStock:stock.low};}),recipes:isStore?recipes:[],tables,
     orders:sales.includes(user.role)||user.role==='kitchen'||isFinance?orders.sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).map(order=>publicOrder(user,order)):[],
     heldBills:sales.includes(user.role)?heldBills.filter(bill=>bill.status==='held').sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)):[],
     creditEntries:isFinance?credits.sort((a,b)=>b.createdAt.localeCompare(a.createdAt)):[],

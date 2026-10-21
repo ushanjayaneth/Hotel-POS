@@ -11,7 +11,7 @@ export type ReceiptSettings=Settings & typeof receiptDefaults;
 const id=z.string().min(1).max(160);
 const command=z.string().min(8).max(160);
 const money=z.number().int().min(0).max(1_000_000_000);
-export const draftSchema=z.object({commandId:command,branchId:id,type:z.enum(['dine-in','takeaway','delivery']),tableId:id.nullish(),customerId:id.nullish(),note:z.string().max(1000).default(''),discount:money.default(0),lines:z.array(z.object({menuItemId:id,quantity:z.number().int().positive().max(1000),note:z.string().max(300).default('')})).min(1).max(100)});
+export const draftSchema=z.object({commandId:command,branchId:id,type:z.enum(['dine-in','takeaway','delivery']),tableId:id.nullish(),customerId:id.nullish(),note:z.string().max(1000).default(''),discount:money.default(0),lines:z.array(z.object({menuItemId:id,quantity:z.number().int().positive().max(1000),note:z.string().max(300).default(''),discount:money.default(0)})).min(1).max(100)});
 const financial:Role[]=['owner','manager','cashier','accountant'];
 const sales:Role[]=['owner','manager','cashier','waiter'];
 
@@ -47,12 +47,13 @@ const csvField=(value:unknown)=>{let text=String(value??'');if(/^[\s]*[=+@\-]/.t
 export function registerBusinessRoutes(app:FastifyInstance,context:Context) {
   const {store,getUser,scoped,audit,openShift}=context;
   const validateDraft=(user:User,body:z.infer<typeof draftSchema>)=>{
-    scoped(user,body.branchId);if(body.discount)permit(user,['owner','manager']);
+    scoped(user,body.branchId);if(body.discount||body.lines.some(line=>line.discount>0))permit(user,['owner','manager']);
     requireThat(body.type==='dine-in'||!body.tableId,'A table can only be assigned to dine-in service.');
     if(body.tableId)requireThat(store.get<{branchId:string}>('table',body.tableId)?.branchId===body.branchId,'Table not found in this branch.',404);
     if(body.customerId)requireThat(store.get('customer',body.customerId),'Customer not found.',404);
-    let total=0;for(const line of body.lines){const item=store.get<MenuItem>('menu',line.menuItemId);requireThat(item,'Menu item not found.',404);total+=item.price*line.quantity;}
-    requireThat(body.discount<=total,'Discount cannot exceed the subtotal.');
+    let subtotal=0,total=0;for(const line of body.lines){const item=store.get<MenuItem>('menu',line.menuItemId);requireThat(item,'Menu item not found.',404);const gross=item.price*line.quantity;requireThat(Number.isSafeInteger(gross)&&gross>0,'The calculated product amount is invalid.');requireThat(line.discount<=gross,'A product discount cannot exceed its line amount.');subtotal+=gross;total+=gross-line.discount;}
+    requireThat(Number.isSafeInteger(subtotal)&&subtotal<=1_000_000_000,'Order subtotal exceeds the allowed limit.');
+    requireThat(body.discount<=total,'Cart discount cannot exceed the amount after product discounts.');
   };
   app.post('/api/held-bills',async request=>{
     const user=getUser(request);permit(user,sales);const body=draftSchema.extend({label:z.string().trim().min(1).max(100).default('Held bill')}).parse(request.body);validateDraft(user,body);

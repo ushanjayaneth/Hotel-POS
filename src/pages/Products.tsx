@@ -19,11 +19,12 @@ import {
   Tag,
   X,
 } from "lucide-react";
-import type { Category, InventoryItem, MenuItem } from "../../shared/types";
+import type { Category, MenuItem } from "../../shared/types";
 import { usePOS } from "../lib/context";
 import { commandId, money, number } from "../lib/format";
 import { useBackLayer } from "../lib/navigation";
 import { isProductImageReference } from "../../shared/media";
+import { productStockState } from "../../shared/stock";
 import PhotoPicker from "../components/PhotoPicker";
 import ProductPhoto from "../components/ProductPhoto";
 import "../styles/products.css";
@@ -310,7 +311,7 @@ export function ProductDialog({
       preparationMinutes: Number(fields.get("preparationMinutes") || 0),
       barcode: text("barcode"),
       sku: text("sku").toUpperCase(),
-      reorderLevel: Number(fields.get("minimum") || 0),
+      reorderLevel: text("minimum") === "" ? 5 : Number(text("minimum")),
     };
     if (!selectedCategory) {
       setError("Choose or create a category first.");
@@ -504,19 +505,23 @@ export function ProductDialog({
                 defaultValue={product?.preparationMinutes ?? 10}
               />
             </Field>
-            <Field label="Reorder alert level">
+            <Field label="Low stock alert at">
               <input
                 className="input"
                 name="minimum"
+                aria-label="Low stock alert at"
                 type="number"
                 min="0"
                 max="100000"
                 step="0.001"
-                required
                 defaultValue={
-                  linkedStock?.minimum ?? product?.reorderLevel ?? 10
+                  product?.reorderLevel ?? linkedStock?.minimum ?? 5
                 }
+                placeholder="5"
               />
+              <small className="product-field-help">
+                Alert at this quantity or below. Leave blank to use 5 units.
+              </small>
             </Field>
             <PhotoPicker value={image} onChange={setImage} onBusyChange={setPhotoBusy} disabled={busy} />
             <Field label="Description (optional)" full>
@@ -674,26 +679,18 @@ export default function Products() {
   const [categoryDialog, setCategoryDialog] = useState(false);
   const canEdit = ["owner", "manager"].includes(data.user.role);
   const products = data.menu as Product[];
-  const stockFor = (product: Product) =>
-    data.inventory.find(
-      (stock) =>
-        stock.branchId === branchId &&
-        stock.menuItemId === product.id &&
-        ["prepared", "resale"].includes(stock.category),
-    );
-  const lowStock = products.filter((product) => {
-    const stock = stockFor(product);
-    return stock && stock.quantity <= stock.minimum;
-  });
+  const stockStateFor = (product: Product) =>
+    productStockState(product, data.inventory, data.recipes, branchId);
+  const lowStock = products.filter((product) => stockStateFor(product).low);
   const filtered = products.filter((product) => {
-    const stock = stockFor(product);
+    const stockState = stockStateFor(product);
     return (
       (category === "all" || product.categoryId === category) &&
       `${product.name} ${product.description} ${product.barcode || ""} ${product.sku || ""}`
         .toLowerCase()
         .includes(search.toLowerCase()) &&
       (stockFilter === "all" ||
-        (stockFilter === "low" && stock && stock.quantity <= stock.minimum) ||
+        (stockFilter === "low" && stockState.low) ||
         (stockFilter === "unavailable" && !product.available))
     );
   });
@@ -709,10 +706,11 @@ export default function Products() {
         "Cost (LKR)",
         "Stock quantity",
         "Stock unit",
+        "Low stock alert at",
         "Tracking",
       ],
       ...filtered.map((product) => {
-        const stock = stockFor(product);
+        const stock = stockStateFor(product);
         return [
           product.name,
           data.categories.find((category) => category.id === product.categoryId)
@@ -721,8 +719,9 @@ export default function Products() {
           product.barcode || "",
           product.price / 100,
           product.cost / 100,
-          stock?.quantity ?? "",
-          stock?.unit || "",
+          stock.quantity ?? "",
+          stock.unit,
+          product.stockMode === "untracked" ? "" : stock.threshold,
           product.stockMode,
         ];
       }),
@@ -816,7 +815,7 @@ export default function Products() {
             Low stock
           </span>
           <strong>{number(lowStock.length)}</strong>
-          <small>Below the reorder level</small>
+          <small>At or below each product's alert level</small>
         </div>
       </div>
       <section className="panel products-catalogue">
@@ -878,7 +877,7 @@ export default function Products() {
             </thead>
             <tbody>
               {filtered.map((product) => {
-                const stock = stockFor(product);
+                const stock = stockStateFor(product);
                 return (
                   <tr key={product.id}>
                     <td>
@@ -911,14 +910,17 @@ export default function Products() {
                     </td>
                     <td>{money(product.cost)}</td>
                     <td>
-                      {stock ? (
+                      {stock.quantity !== null ? (
                         <div
-                          className={`product-stock ${stock.quantity <= stock.minimum ? "low" : ""}`}
+                          className={`product-stock ${stock.low ? "low" : ""}`}
                         >
                           <strong>
                             {number(stock.quantity)} <span>{stock.unit}</span>
                           </strong>
-                          <small>Reorder at {number(stock.minimum)}</small>
+                          <small>
+                            {stock.low ? "Low stock" : "Alert"} at {number(stock.threshold)}
+                            {product.stockMode === "recipe" ? " · From recipe ingredients" : ""}
+                          </small>
                         </div>
                       ) : (
                         <span className="product-untracked">

@@ -54,6 +54,7 @@ const draftSchema = z.object({
         menuItemId: identifier,
         quantity: z.number().int().positive().max(1000),
         note: z.string().max(300).default(""),
+        discount: money.default(0),
       }),
     )
     .min(1)
@@ -150,6 +151,7 @@ function publicOrder(request: LocalRequest, order: Order): Order {
       customerId: null,
       subtotal: 0,
       discount: 0,
+      cartDiscount: 0,
       tax: 0,
       serviceCharge: 0,
       total: 0,
@@ -159,6 +161,7 @@ function publicOrder(request: LocalRequest, order: Order): Order {
       lines: order.lines.map((line) => ({
         ...line,
         unitPrice: 0,
+        discount: 0,
         lineTotal: 0,
       })),
     };
@@ -295,7 +298,8 @@ async function validateDraft(
   available = false,
 ) {
   await scopeLocal(request.store, request.user, body.branchId);
-  if (body.discount > 0) permitLocal(request.user, management);
+  if (body.discount > 0 || body.lines.some(line => line.discount > 0))
+    permitLocal(request.user, management);
   requireLocal(
     body.type === "dine-in" || !body.tableId,
     "A table can only be assigned to a dine-in order.",
@@ -323,6 +327,7 @@ async function validateDraft(
     );
   const lines: { input: DraftInput["lines"][number]; item: MenuItem }[] = [];
   let subtotal = 0;
+  let itemDiscount = 0;
   for (const input of body.lines) {
     const item = await request.store.get<MenuItem>("menu", input.menuItemId);
     requireLocal(item, "Menu item not found.", 404);
@@ -339,7 +344,10 @@ async function validateDraft(
       409,
       "INVALID_PRICE",
     );
-    subtotal = checkedMoney(subtotal + item.price * input.quantity);
+    const gross = checkedMoney(item.price * input.quantity);
+    requireLocal(input.discount <= gross, "A product discount cannot exceed its line amount.");
+    subtotal = checkedMoney(subtotal + gross);
+    itemDiscount = checkedMoney(itemDiscount + input.discount);
     lines.push({ input, item });
   }
   requireLocal(
@@ -347,10 +355,10 @@ async function validateDraft(
     "Order subtotal exceeds the allowed limit.",
   );
   requireLocal(
-    body.discount <= subtotal,
-    "Discount cannot exceed the subtotal.",
+    body.discount <= subtotal - itemDiscount,
+    "Cart discount cannot exceed the amount after product discounts.",
   );
-  return { lines, subtotal };
+  return { lines, subtotal, itemDiscount };
 }
 
 async function globalBranch(request: LocalRequest, requested?: string) {
@@ -402,7 +410,7 @@ export async function handleCashier(
         expectedHeldUpdatedAt: z.iso.datetime().optional(),
       })
       .parse(request.body);
-    const { lines: priced, subtotal } = await validateDraft(
+    const { lines: priced, subtotal, itemDiscount } = await validateDraft(
       request,
       body,
       true,
@@ -440,7 +448,7 @@ export async function handleCashier(
       "Tax or service charge settings are invalid.",
       409,
     );
-    const taxable = subtotal - body.discount;
+    const taxable = subtotal - itemDiscount - body.discount;
     const serviceCharge =
       body.type === "dine-in"
         ? Math.round((taxable * settings.serviceChargeRate) / 100)
@@ -450,8 +458,8 @@ export async function handleCashier(
     );
     const total = checkedMoney(taxable + serviceCharge + tax);
     requireLocal(
-      total > 0 && total <= 1_000_000_000,
-      "Order total must be positive and within the allowed limit.",
+      total <= 1_000_000_000,
+      "Order total exceeds the allowed limit.",
     );
     const number = await receiptNumber(request, body.branchId);
     const orderId = uid("order");
@@ -470,7 +478,8 @@ export async function handleCashier(
         unitPrice: item.price,
         unitCost: cost.unitCost,
         costBasis: cost.complete ? "captured" : "estimated",
-        lineTotal: item.price * input.quantity,
+        discount: input.discount,
+        lineTotal: item.price * input.quantity - input.discount,
         note: input.note,
       });
     }
@@ -483,9 +492,10 @@ export async function handleCashier(
       tableId: body.tableId ?? null,
       customerId: body.customerId ?? null,
       status: "new",
-      paymentStatus: "unpaid",
+      paymentStatus: total === 0 ? "paid" : "unpaid",
       subtotal,
-      discount: body.discount,
+      discount: itemDiscount + body.discount,
+      cartDiscount: body.discount,
       tax,
       serviceCharge,
       total,

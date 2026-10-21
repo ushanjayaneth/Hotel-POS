@@ -412,7 +412,14 @@ export function Orders({
                   {o.lines.slice(0, 3).map((l) => (
                     <div key={l.id}>
                       <span className="order-line-qty">{l.quantity}×</span>
-                      <span>{l.name}</span>
+                      <span>
+                        {l.name}
+                        {(l.discount || 0) > 0 && (
+                          <small style={{ display: "block" }}>
+                            Item discount − {money(l.discount || 0)}
+                          </small>
+                        )}
+                      </span>
                       <span>{money(l.lineTotal)}</span>
                     </div>
                   ))}
@@ -987,6 +994,18 @@ export function Receipt({
 }) {
   useDevicePreferences();
   const dimensions = receiptDimensions(settings);
+  const itemDiscount = order.lines.reduce(
+    (sum, line) => sum + (line.discount || 0),
+    0,
+  );
+  const hasItemDiscountMetadata = order.lines.some(
+    (line) => line.discount !== undefined,
+  );
+  const cartDiscount =
+    order.cartDiscount ??
+    (hasItemDiscountMetadata
+      ? Math.max(0, order.discount - itemDiscount)
+      : order.discount);
   const content = (
     <>
       <h2>{settings.businessName || "DEMO HOTEL"}</h2>
@@ -1027,6 +1046,11 @@ export function Receipt({
             <tr key={l.id}>
               <td>
                 {l.quantity} × {l.name}
+                {(l.discount || 0) > 0 && (
+                  <small style={{ display: "block", fontSize: ".85em" }}>
+                    Item discount − {money(l.discount || 0)}
+                  </small>
+                )}
               </td>
               <td>{money(l.lineTotal)}</td>
             </tr>
@@ -1038,10 +1062,20 @@ export function Receipt({
           <span>Subtotal</span>
           <span>{money(order.subtotal)}</span>
         </div>
-        {order.discount > 0 && (
+        {itemDiscount > 0 && (
           <div>
-            <span>Discount</span>
-            <span>− {money(order.discount)}</span>
+            <span>Item discounts</span>
+            <span>− {money(itemDiscount)}</span>
+          </div>
+        )}
+        {cartDiscount > 0 && (
+          <div>
+            <span>
+              {hasItemDiscountMetadata || order.cartDiscount !== undefined
+                ? "Cart discount"
+                : "Discount"}
+            </span>
+            <span>− {money(cartDiscount)}</span>
           </div>
         )}
         <div>

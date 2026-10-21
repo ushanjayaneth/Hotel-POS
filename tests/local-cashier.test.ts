@@ -583,7 +583,7 @@ test("local role, branch, version, payment-method and numeric guards reject unsa
     await assert.rejects(
       f.order({ lines: [{ menuItemId: "rice", quantity: Infinity }] }),
     );
-    await assert.rejects(f.order({ discount: 10000 }));
+    await assert.rejects(f.order({ discount: 10001 }));
     assert.equal((await f.store.list<Order>("order")).length, 0);
     const shift = await f.shift();
     const order = await f.order();
