@@ -118,8 +118,8 @@ export function parseServiceAccount(raw: string): any {
   } catch (err) {
     try {
       parsed = Function(`return (${text})`)();
-    } catch {
-      throw err;
+    } catch (funcErr: any) {
+      throw new Error(`Service account parse failed. JSON: ${(err as Error).message}. JS: ${funcErr?.message}. Prefix: ${JSON.stringify(text.slice(0, 40))}`);
     }
   }
   if (parsed && typeof parsed.private_key === 'string') {
