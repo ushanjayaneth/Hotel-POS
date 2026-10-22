@@ -58,7 +58,7 @@ import {DeviceSetup,InitialDeviceRestore} from './components/DeviceSetup';
 import {syncLocalProductPhotos} from './lib/media';
 import {flushBeforeAppUpdate} from './lib/update-safety';
 import {sharedCloudSource} from './lib/cloud-shared';
-import {cloudRequest,syncDeviceCloud} from './lib/cloud-sync';
+import {autoConnectDeviceToCloud,cloudRequest,syncDeviceCloud} from './lib/cloud-sync';
 import CloudMonitor from './components/CloudMonitor';
 import ConnectivityStatus from './components/ConnectivityStatus';
 
@@ -281,7 +281,7 @@ function WorkspaceApp() {
   useEffect(()=>{
     if(!deviceMode||!user)return;
     let timer:ReturnType<typeof setTimeout>|undefined;
-    const upload=()=>{if(navigator.onLine!==false)void syncDeviceCloud().catch(()=>{});};
+    const upload=()=>{if(navigator.onLine!==false){void autoConnectDeviceToCloud().catch(()=>{});void syncDeviceCloud().catch(()=>{});}};
     const change=()=>{clearTimeout(timer);timer=setTimeout(upload,1000);};
     upload();const interval=setInterval(upload,30000);
     window.addEventListener('online',upload);window.addEventListener('focus',upload);window.addEventListener('local-workspace-change',change);

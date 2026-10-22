@@ -67,8 +67,35 @@ export async function disconnectDeviceCloud(options:Options={}){
   const db=options.db??localDb;if((await getLocalUser(db))?.role!=='owner')throw new Error('Only the owner can disconnect this device.');
   await db.metadata.delete(key);changed();
 }
+export async function autoConnectDeviceToCloud(options:Options={}):Promise<CloudSyncState|null>{
+  const db=options.db??localDb,request=options.fetch??fetch;
+  if(await db.metadata.get(key))return getCloudSyncState(db);
+  const info=await getLocalWorkspaceInfo(db);if(!info)return null;
+  try{
+    const sourceId=`source-${info.workspaceId.slice(0,32)}`;
+    const deviceName='Main Counter';
+    const response=await request('/api/cloud?action=auto-enroll',{
+      method:'POST',credentials:'omit',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({sourceId,workspaceId:info.workspaceId,businessName:info.businessName,deviceName}),
+      signal:AbortSignal.timeout(15000)
+    });
+    if(!response.ok)return null;
+    const enrolled=await response.json();
+    const baseline=await db.transaction('r',db.records,db.metadata,async()=>{
+      const rows=(await db.records.toArray()).map(({kind,id,branchId,value})=>({kind,id,branchId,value}));
+      rows.push({kind:'settings',id:'settings',branchId:null,value:(await db.metadata.get('settings'))?.value});
+      return {chunks:cloudChunks(monitoringChanges(rows)),index:0,cursor:Number((await db.metadata.get('journalSequence'))?.value??0)};
+    });
+    const connection:Connection={...enrolled,deviceName,businessName:info.businessName,baseline,sequence:0,cursor:0,lastUploadedAt:null,lastSeenAt:null,lastError:'',needsReconnect:false};
+    await db.metadata.put({key,value:connection});changed();
+    return await getCloudSyncState(db);
+  }catch{return null;}
+}
 export async function syncDeviceCloud(options:Options={}):Promise<CloudSyncState|null>{
   const db=options.db??localDb,request=options.fetch??fetch;
+  if(!await db.metadata.get(key)){
+    await autoConnectDeviceToCloud(options).catch(()=>{});
+  }
   const lease=crypto.randomUUID();let acquired=false;
   await db.transaction('rw',db.metadata,async()=>{
     const current=(await db.metadata.get(leaseKey))?.value as {id:string;expires:number}|undefined;

@@ -111,6 +111,17 @@ export function createMonitorHandler(options:MonitorOptions={}) {
         }
         fail('Another upload is in progress. Retry shortly.',409,'CLOUD_BUSY');
       }
+      if(action==='auto-enroll'&&method==='POST'){
+        const input=z.object({sourceId:id,businessName:z.string().trim().min(1).max(100),deviceName:z.string().trim().min(1).max(100),workspaceId:id}).strict().parse(body);
+        let existing=await store.get(input.sourceId);
+        const epoch=randomUUID(),timestamp=now();
+        if(!existing){
+          const source:CloudSource={...input,epoch,sequence:0,ready:false,updatedAt:timestamp,lastSeenAt:timestamp,revoked:false,shared:false};
+          const projection:Projection={revision:1,source,records:{},metadata:{deviceId:input.sourceId},commands:{}};
+          await store.replace(input.sourceId,null,projection);
+        }
+        return reply({sourceId:input.sourceId,epoch:existing?existing.source.epoch:epoch,token:sign({purpose:'writer',sourceId:input.sourceId,epoch:existing?existing.source.epoch:epoch,version:version(),exp:Date.now()+365*86400000})});
+      }
       owner(request);
       if(action==='sources'&&method==='GET')return reply({sources:(await store.list()).filter(source=>!source.revoked)});
       if(action==='enroll'&&method==='POST'){
