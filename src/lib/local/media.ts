@@ -1,5 +1,5 @@
-import {assertMediaPayload, isMediaId, mediaMetadata, sameMedia, type MediaRecord, type MediaResponse} from '../../../shared/media';
-import {auditLocal, LocalError, now, permitLocal, requireLocal, scopeLocal, type LocalRequest} from './types';
+import {assertMediaPayload, isMediaId, mediaMetadata, sameMedia, type MediaRecord, type MediaResponse} from '../../../shared/media.js';
+import {auditLocal, LocalError, now, permitLocal, requireLocal, scopeLocal, type LocalRequest} from './types.js';
 
 export async function handleMedia({path, method, user, store, body}: LocalRequest): Promise<unknown | undefined> {
   if (path === '/media' && method === 'POST') {

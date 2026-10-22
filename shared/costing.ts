@@ -1,4 +1,4 @@
-import type { Expense, InventoryItem, MenuItem, OrderLine, Recipe, Snapshot } from './types';
+import type { Expense, InventoryItem, MenuItem, OrderLine, Recipe, Snapshot, StockMovement } from './types.js';
 
 export interface ProductCost {
   unitCost: number;
@@ -69,6 +69,7 @@ export interface ProductProfit {
   estimated: boolean;
 }
 export interface ProfitReport {
+  wastageCost: number;
   from: string;
   to: string;
   netSales: number;
@@ -85,7 +86,7 @@ export interface ProfitReport {
   missingCostLines: number;
   bills: number;
   products: ProductProfit[];
-  daily: { date: string; netSales: number; costOfSales: number; cancelledCost: number; operatingExpenses: number; operatingProfit: number }[];
+  daily: { date: string; netSales: number; costOfSales: number; cancelledCost: number; wastageCost: number; operatingExpenses: number; operatingProfit: number }[];
 }
 
 export function isInventoryExpense(expense: Pick<Expense, 'category'>): boolean {
@@ -95,13 +96,13 @@ export function isInventoryExpense(expense: Pick<Expense, 'category'>): boolean 
 /** Confirmed-bill basis, including credit/unpaid bills. Refunds restate the original bill date.
  * No inventory restock exists on refunds/cancellations, so the consumed cost stays recorded.
  */
-export function profitability(data: Pick<Snapshot, 'branch' | 'menu' | 'recipes' | 'inventory' | 'orders' | 'expenses'>, from: string, to = from): ProfitReport {
-  const report: ProfitReport = { from, to, netSales: 0, costOfSales: 0, grossProfit: 0, margin: 0, cancelledCost: 0, operatingExpenses: 0, excludedInventoryExpenses: 0, operatingProfit: 0, refundedNetSales: 0, outstanding: 0, estimatedLines: 0, missingCostLines: 0, bills: 0, products: [], daily: [] };
+export function profitability(data: Pick<Snapshot, 'branch' | 'menu' | 'recipes' | 'inventory' | 'orders' | 'expenses'> & {stockMovements?:StockMovement[]}, from: string, to = from): ProfitReport {
+  const report: ProfitReport = { from, to, wastageCost: 0, netSales: 0, costOfSales: 0, grossProfit: 0, margin: 0, cancelledCost: 0, operatingExpenses: 0, excludedInventoryExpenses: 0, operatingProfit: 0, refundedNetSales: 0, outstanding: 0, estimatedLines: 0, missingCostLines: 0, bills: 0, products: [], daily: [] };
   const products = new Map<string, ProductProfit>();
   const days = new Map<string, ProfitReport['daily'][number]>();
   const dayRow = (date: string) => {
     let row = days.get(date);
-    if (!row) { row = { date, netSales: 0, costOfSales: 0, cancelledCost: 0, operatingExpenses: 0, operatingProfit: 0 }; days.set(date, row); }
+    if (!row) { row = { date, netSales: 0, costOfSales: 0, cancelledCost: 0, wastageCost: 0, operatingExpenses: 0, operatingProfit: 0 }; days.set(date, row); }
     return row;
   };
   const lineCost = (line: OrderLine) => {
@@ -148,11 +149,18 @@ export function profitability(data: Pick<Snapshot, 'branch' | 'menu' | 'recipes'
     if (isInventoryExpense(expense)) report.excludedInventoryExpenses += expense.amount;
     else { report.operatingExpenses += expense.amount; dayRow(date).operatingExpenses += expense.amount; }
   }
+  for (const movement of data.stockMovements ?? []) {
+    if (movement.type !== 'waste' || movement.branchId !== data.branch.id) continue;
+    const date = businessDate(movement.createdAt);
+    if (date < from || date > to) continue;
+    const cost = movement.totalCost ?? 0;
+    report.wastageCost += cost; dayRow(date).wastageCost += cost;
+  }
   report.grossProfit = report.netSales - report.costOfSales;
   report.margin = report.netSales > 0 ? report.grossProfit / report.netSales * 100 : 0;
-  report.operatingProfit = report.grossProfit - report.cancelledCost - report.operatingExpenses;
+  report.operatingProfit = report.grossProfit - report.cancelledCost - report.wastageCost - report.operatingExpenses;
   report.products = [...products.values()].map(product => ({ ...product, grossProfit: product.netSales - product.cost })).sort((a, b) => b.grossProfit - a.grossProfit);
-  report.daily = [...days.values()].map(day => ({ ...day, operatingProfit: day.netSales - day.costOfSales - day.cancelledCost - day.operatingExpenses })).sort((a, b) => a.date.localeCompare(b.date));
+  report.daily = [...days.values()].map(day => ({ ...day, operatingProfit: day.netSales - day.costOfSales - day.cancelledCost - day.wastageCost - day.operatingExpenses })).sort((a, b) => a.date.localeCompare(b.date));
   return report;
 }
 
@@ -166,9 +174,9 @@ export function profitCsv(report: ProfitReport): string {
   const rows: unknown[][] = [
     ['Profitability - confirmed bill basis; refunds restate original bill date'],
     ['From', report.from, 'To', report.to],
-    ['Date (Asia/Colombo)', 'Net sales (LKR)', 'Cost of sales (LKR)', 'Cancelled food cost (LKR)', 'Operating expenses (LKR)', 'Operating estimate (LKR)'],
-    ...report.daily.map(day => [day.date, amount(day.netSales), amount(day.costOfSales), amount(day.cancelledCost), amount(day.operatingExpenses), amount(day.operatingProfit)]),
-    ['TOTAL', amount(report.netSales), amount(report.costOfSales), amount(report.cancelledCost), amount(report.operatingExpenses), amount(report.operatingProfit)],
+    ['Date (Asia/Colombo)', 'Net sales (LKR)', 'Cost of sales (LKR)', 'Cancelled food cost (LKR)', 'Wastage cost (LKR)', 'Operating expenses (LKR)', 'Operating estimate (LKR)'],
+    ...report.daily.map(day => [day.date, amount(day.netSales), amount(day.costOfSales), amount(day.cancelledCost), amount(day.wastageCost), amount(day.operatingExpenses), amount(day.operatingProfit)]),
+    ['TOTAL', amount(report.netSales), amount(report.costOfSales), amount(report.cancelledCost), amount(report.wastageCost), amount(report.operatingExpenses), amount(report.operatingProfit)],
     [], ['Product', 'Units', 'Net sales (LKR)', 'Cost (LKR)', 'Gross profit (LKR)', 'Cancelled food cost (LKR)', 'Cost basis'],
     ...report.products.map(product => [product.name, product.quantity, amount(product.netSales), amount(product.cost), amount(product.grossProfit), amount(product.wasteCost), product.estimated ? 'Includes estimates' : 'Captured at sale']),
     [], ['Estimated historical lines', report.estimatedLines], ['Missing cost configuration lines', report.missingCostLines],

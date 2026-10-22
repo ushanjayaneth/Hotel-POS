@@ -1,9 +1,9 @@
 import { z } from 'zod';
-import {isProductImageReference,mediaIdFromReference} from '../../../shared/media';
-import { weightedUnitCost } from '../../../shared/costing';
-import type { AuditEvent, Category, CreditEntry, Customer, Expense, InventoryItem, MenuItem, Order, ProductionBatch, Purchase, Recipe, Role, Settings, StaffMember, StockMovement, Supplier, User } from '../../../shared/types';
-import { now, uid, requireLocal, permitLocal, scopeLocal, type LocalRequest } from './types';
-import { pinAlreadyUsed, setLocalPin } from './auth';
+import {isProductImageReference,mediaIdFromReference} from '../../../shared/media.js';
+import { weightedUnitCost } from '../../../shared/costing.js';
+import type { AuditEvent, Category, CreditEntry, Customer, Expense, InventoryItem, MenuItem, Order, ProductionBatch, Purchase, Recipe, Role, Settings, StaffMember, StockMovement, Supplier, User } from '../../../shared/types.js';
+import { now, uid, requireLocal, permitLocal, scopeLocal, type LocalRequest } from './types.js';
+import { pinAlreadyUsed, setLocalPin } from './auth.js';
 
 const id = z.string().min(1).max(160);
 const command = z.string().min(8).max(160).optional();
@@ -36,7 +36,7 @@ async function moveStock(request: LocalRequest, item: InventoryItem, delta: numb
   requireLocal(Number.isFinite(next) && next >= 0, `Insufficient ${item.name}: ${item.quantity} ${item.unit} available.`, 409, 'INSUFFICIENT_STOCK');
   const updated = { ...item, quantity: next, updatedAt: now() };
   await request.store.put('inventory', updated);
-  await request.store.put<StockMovement>('movement', { id: uid('stock'), itemId: item.id, branchId: item.branchId, type, quantity: roundQuantity(delta), reason, createdAt: now(), createdBy: request.user.id });
+  await request.store.put<StockMovement>('movement', { id: uid('stock'), itemId: item.id, branchId: item.branchId, type, quantity: roundQuantity(delta), reason, createdAt: now(), createdBy: request.user.id,...(type==='waste'?{unitCost:item.unitCost,totalCost:Math.round(Math.abs(delta)*item.unitCost)}:{}) });
   return updated;
 }
 
@@ -94,6 +94,13 @@ async function incomeExpenseReport(request: LocalRequest) {
 
 export async function handleCatalog(request: LocalRequest): Promise<unknown | undefined> {
   const { path, method, store, user } = request;
+  if(path==='/inventory/wastage'&&method==='POST'){
+    permitLocal(user,productionRoles);
+    const body=z.object({commandId:command,branchId:id,itemId:id,quantity,reason:z.string().trim().min(3).max(500)}).parse(request.body);
+    await scopeLocal(store,user,body.branchId);const item=await store.get<InventoryItem>('inventory',body.itemId);
+    requireLocal(item&&item.branchId===body.branchId,'Stock item not found.',404);
+    await moveStock(request,item!,-body.quantity,'waste',body.reason);await audit(request,body.branchId,'stock.wastage',`${item!.name}: ${body.quantity} ${item!.unit} · ${body.reason}`);return {ok:true};
+  }
   const branch = user.branchId ?? 'b1';
   const categoryMatch = /^\/categories\/([^/]+)$/.exec(path);
   if (path === '/categories' && method === 'POST' || categoryMatch && ['PATCH', 'DELETE'].includes(method)) {

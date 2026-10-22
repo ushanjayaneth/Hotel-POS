@@ -15,6 +15,7 @@ import {registerMediaRoutes} from './media';
 import {isProductImageReference} from '../shared/media';
 import { productCost, weightedUnitCost } from '../shared/costing';
 import { productStockState } from '../shared/stock';
+import {createMonitorHandler,type MonitorOptions} from './monitor/handler';
 
 const command = z.string().min(8).max(160);
 const id = z.string().min(1).max(160);
@@ -29,7 +30,7 @@ const management: Role[] = ['owner','manager'];
 const stores: Role[] = ['owner','manager','storekeeper'];
 const productionRoles: Role[] = ['owner','manager','kitchen','storekeeper'];
 const roundQty = (x: number) => Math.round(x*10000)/10000;
-interface AppOptions { databasePath?: string; seed?: boolean; logger?: boolean }
+interface AppOptions { databasePath?: string; seed?: boolean; logger?: boolean; monitor?:MonitorOptions }
 
 export async function createApp(options: AppOptions = {}) {
   const app = Fastify({logger: options.logger ?? false, bodyLimit: 256 * 1024, trustProxy: false});
@@ -62,7 +63,7 @@ export async function createApp(options: AppOptions = {}) {
   const moveStock = (user:User,item:InventoryItem,delta:number,type:string,reason:string) => {
     const next=roundQty(item.quantity+delta);requireThat(next>=0,`Insufficient ${item.name}: ${item.quantity} ${item.unit} available.`,409,'INSUFFICIENT_STOCK');
     store.put('inventory',{...item,quantity:next,updatedAt:now()});
-    store.put<StockMovement>('movement',{id:uid('stock'),itemId:item.id,branchId:item.branchId,type,quantity:roundQty(delta),reason,createdAt:now(),createdBy:user.id});
+    store.put<StockMovement>('movement',{id:uid('stock'),itemId:item.id,branchId:item.branchId,type,quantity:roundQty(delta),reason,createdAt:now(),createdBy:user.id,...(type==='waste'?{unitCost:item.unitCost,totalCost:Math.round(Math.abs(delta)*item.unitCost)}:{})});
   };
   const consume = (user:User,branchId:string,item:MenuItem,count:number,reason:string,production=false) => {
     if(!production && item.stockMode==='untracked') return;
@@ -140,6 +141,12 @@ export async function createApp(options: AppOptions = {}) {
     return reply.code(status).send({error:status===500?'The operation could not be saved. Please try again.':httpError.message??'Invalid request.',code:status===500?'INTERNAL_ERROR':'INVALID_REQUEST'});
   });
   app.get('/api/health',async()=>({ok:true,service:'demo-hotel-branch-hub',database:'sqlite',time:now()}));
+  const monitor=createMonitorHandler(options.monitor);
+  app.all('/api/cloud',{bodyLimit:700000},async(request,reply)=>{
+    const headers=new Headers();for(const [key,value] of Object.entries(request.headers))if(value!==undefined)headers.set(key,Array.isArray(value)?value.join(','):value);
+    const response=await monitor(new Request(`${request.protocol}://${request.headers.host}${request.url}`,{method:request.method,headers,...(['GET','HEAD'].includes(request.method)?{}:{body:JSON.stringify(request.body)})}));
+    for(const [key,value] of response.headers)reply.header(key,value);return reply.code(response.status).send(await response.text());
+  });
   app.get('/api/session',async request=>({user:sessionUser(store,request)??null,demo:store.meta('demo')==='true'}));
   app.post('/api/login',async(request,reply)=>{
     const body=z.object({pin:z.string().regex(/^\d{4,12}$/),staffId:id.optional()}).parse(request.body);
@@ -175,7 +182,7 @@ export async function createApp(options: AppOptions = {}) {
       categories:store.list<Category>('category'),menu:store.list<MenuItem>('menu').map(x=>maySeeCosts?x:{...x,cost:0}),recipes:isStore?store.list<Recipe>('recipe'):[],
       tables:store.list<DiningTable>('table',branchId),orders:sales.includes(user.role)||user.role==='kitchen'||isFinance?store.list<Order>('order',branchId).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)):[],
       heldBills:sales.includes(user.role)?store.list<HeldBillRecord>('held',branchId).filter(x=>x.status==='held').reverse():[],creditEntries:isFinance?store.list<CreditRecord>('credit',branchId).reverse():[],
-      inventory:isStore?store.list<InventoryItem>('inventory',branchId).map(x=>maySeeCosts?x:{...x,unitCost:0}):[],stockMovements:isStore?store.list<StockMovement>('movement',branchId).slice(-500).reverse():[],
+      inventory:isStore?store.list<InventoryItem>('inventory',branchId).map(x=>maySeeCosts?x:{...x,unitCost:0}):[],stockMovements:isStore?store.list<StockMovement>('movement',branchId).filter((row,index,all)=>index>=all.length-500||row.type==='waste').reverse().map(row=>maySeeCosts?row:{...row,unitCost:undefined,totalCost:undefined}):[],
       production:productionRoles.includes(user.role)?store.list<ProductionBatch>('production',branchId).reverse().map(x=>maySeeCosts?x:{...x,cost:0}):[],suppliers:stores.includes(user.role)||user.role==='accountant'?store.list<Supplier>('supplier'):[],
       purchases:stores.includes(user.role)||user.role==='accountant'?store.list<Purchase>('purchase',branchId).reverse():[],customers:sales.includes(user.role)||isFinance?store.list<Customer>('customer'):[],
       staff:isManagement?store.list<StaffMember>('staff').filter(x=>user.role==='owner'||x.branchId===branchId):[],expenses:isFinance?store.list<Expense>('expense',branchId).reverse():[],shifts:isFinance?store.list<Shift>('shift',branchId).reverse():[],
@@ -245,7 +252,7 @@ export async function createApp(options: AppOptions = {}) {
   });
   app.post('/api/orders/:id/payments',async request=>{
     const user=getUser(request);permit(user,['owner','manager','cashier']);const params=z.object({id}).parse(request.params);
-    const body=z.object({commandId:command,expectedVersion:z.number().int().positive(),method,amount,received:money.optional(),reference:z.string().max(200).optional()}).parse(request.body);
+    const body=z.object({commandId:command,expectedVersion:z.number().int().positive(),method,amount,received:money.optional(),reference:z.string().max(200).optional(),customerId:id.optional()}).parse(request.body);
     const existing=getOrder(user,params.id);
     return store.command(body.commandId,user.id,`order.payment:${params.id}`,existing.branchId,body,()=>{
       const order=getOrder(user,params.id);versionCheck(order,body.expectedVersion);requireThat(!['cancelled','completed'].includes(order.status),'This order is closed.',409);
@@ -254,15 +261,23 @@ export async function createApp(options: AppOptions = {}) {
       const shift=openShift(order.branchId);requireThat(shift,'Open a cash shift before accepting payments.',409,'SHIFT_REQUIRED');
       const received=body.received??body.amount;requireThat(body.method!=='cash'||received>=body.amount,'Cash received is less than the payment amount.');
       if(body.method!=='cash')requireThat(received===body.amount,'Received amount must equal the payment for non-cash methods.');
-      if(body.method==='credit')requireThat(order.customerId,'Select a customer for a credit sale.');
+      requireThat(body.customerId===undefined||body.method==='credit','A customer can only be selected here for a Customer Loan.');
+      const customerId=body.method==='credit'?(body.customerId??order.customerId):order.customerId;
+      if(body.method==='credit')requireThat(customerId,'Select a customer for a Customer Loan.');
+      const customer=customerId?store.get<Customer>('customer',customerId):undefined;
+      if(customerId)requireThat(customer,'Customer not found.',404);
+      if(body.method==='credit'&&customerId!==order.customerId){
+        const financialHistory=order.payments.length>0||order.paid>0||order.refunded>0||store.list<CreditRecord>('credit',order.branchId).some(entry=>entry.orderId===order.id)||store.list<{orderId:string}>('refund',order.branchId).some(refund=>refund.orderId===order.id);
+        requireThat(!financialHistory,'The customer cannot be changed after a payment or Customer Loan has been recorded.',409,'CUSTOMER_LOCKED');
+      }
       const payment={id:uid('payment'),orderId:order.id,method:body.method,amount:body.amount,received,change:body.method==='cash'?received-body.amount:0,reference:body.reference??'',createdAt:now()};
-      const paid=order.paid+body.amount;const updated:Order={...order,paid,paymentStatus:paid===order.total?'paid':'partial',payments:[...order.payments,payment],updatedAt:now(),version:order.version+1};
+      const paid=order.paid+body.amount;const updated:Order={...order,customerId,paid,paymentStatus:paid===order.total?'paid':'partial',payments:[...order.payments,payment],updatedAt:now(),version:order.version+1};
       // Payment and preparation are independent: a prepaid takeaway must remain in the kitchen queue.
       if(paid===order.total&&order.type!=='dine-in'&&order.status==='served')updated.status='completed';
       store.put('order',updated);
       if(body.method==='cash')store.put('shift',{...shift,expectedCash:shift.expectedCash+body.amount});
-      if(body.method==='credit'&&order.customerId)store.put<CreditRecord>('credit',{id:`credit-${payment.id}`,branchId:order.branchId,customerId:order.customerId,orderId:order.id,type:'sale',amount:body.amount,method:'credit',reference:payment.reference,note:`Credit sale ${order.number}`,createdAt:payment.createdAt,createdBy:user.id});
-      if(order.customerId) {const customer=store.get<Customer>('customer',order.customerId)!;store.put('customer',{...customer,spent:customer.spent+body.amount,visits:customer.visits+(paid===order.total?1:0),balance:customer.balance+(body.method==='credit'?body.amount:0),points:customer.points+Math.floor(body.amount/10000)});}
+      if(body.method==='credit'&&customer)store.put<CreditRecord>('credit',{id:`credit-${payment.id}`,branchId:order.branchId,customerId:customer.id,orderId:order.id,type:'sale',amount:body.amount,method:'credit',reference:payment.reference,note:`Credit sale ${order.number}`,createdAt:payment.createdAt,createdBy:user.id});
+      if(customer)store.put('customer',{...customer,spent:customer.spent+body.amount,visits:customer.visits+(paid===order.total?1:0),balance:customer.balance+(body.method==='credit'?body.amount:0),points:customer.points+Math.floor(body.amount/10000)});
       if(updated.status==='completed')releaseTable(updated);
       audit(user,order.branchId,'payment.accepted',`${order.number} · ${body.method} · ${body.amount}`);return {ok:true,order:publicOrder(user,updated),payment};
     });
@@ -288,6 +303,10 @@ export async function createApp(options: AppOptions = {}) {
   app.post('/api/inventory/adjust',async request=>{
     const user=getUser(request);permit(user,stores);const body=z.object({commandId:command,branchId:id,itemId:id,quantity:z.number().finite().min(-100000).max(100000).refine(x=>x!==0,'Adjustment cannot be zero.'),reason:z.string().trim().min(3).max(500)}).parse(request.body);scoped(user,body.branchId);
     return store.command(body.commandId,user.id,'inventory.adjust',body.branchId,body,()=>{const item=store.get<InventoryItem>('inventory',body.itemId);requireThat(item&&item.branchId===body.branchId,'Stock item not found in this branch.',404);moveStock(user,item,body.quantity,'adjustment',body.reason);audit(user,body.branchId,'stock.adjusted',`${item.name} · ${body.quantity} · ${body.reason}`);return {ok:true};});
+  });
+  app.post('/api/inventory/wastage',async request=>{
+    const user=getUser(request);permit(user,productionRoles);const body=z.object({commandId:command,branchId:id,itemId:id,quantity,reason:z.string().trim().min(3).max(500)}).parse(request.body);scoped(user,body.branchId);
+    return store.command(body.commandId,user.id,'inventory.wastage',body.branchId,body,()=>{const item=store.get<InventoryItem>('inventory',body.itemId);requireThat(item&&item.branchId===body.branchId,'Stock item not found.',404);moveStock(user,item,-body.quantity,'waste',body.reason);audit(user,body.branchId,'stock.wastage',`${item.name}: ${body.quantity} ${item.unit} · ${body.reason}`);return {ok:true};});
   });
   app.post('/api/inventory',async request=>{
     const user=getUser(request);permit(user,stores);const body=z.object({commandId:command.optional(),branchId:id,name:z.string().trim().min(2).max(120),nameSi:z.string().max(160).default(''),category:z.enum(['ingredient','prepared','packaging','resale']),unit:z.string().trim().min(1).max(30),quantity:z.number().finite().min(0).max(100000).default(0),minimum:z.number().finite().min(0).max(100000).optional(),unitCost:money,supplierId:id.nullish(),menuItemId:id.nullish()}).parse(request.body);scoped(user,body.branchId);

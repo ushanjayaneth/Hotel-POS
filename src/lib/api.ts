@@ -1,9 +1,13 @@
 import {isDeviceWorkspace} from './workspace-mode';
+import {sharedCloudSource,sharedCloudApi} from './cloud-shared';
 
 export class ApiError extends Error {
   constructor(message: string, public status = 0) { super(message); this.name = 'ApiError'; }
 }
 export async function api<T>(path: string, body?: unknown, method?: string): Promise<T> {
+  if(sharedCloudSource()){
+    try{return await sharedCloudApi<T>(path,body,method);}catch(error){const value=error as Error&{status?:number};throw new ApiError(value.message,value.status??0);}
+  }
   if(isDeviceWorkspace()){
     try {const {localApi}=await import('./local/core');return await localApi(path,body,method) as T;}
     catch(error){const value=error as Error&{status?:number;statusCode?:number};throw new ApiError(value.message,value.status??value.statusCode??0);}
@@ -26,7 +30,7 @@ export async function hubApi<T>(path:string,body?:unknown,method?:string):Promis
 
 /** Downloads and printable reports use the selected workspace, just like JSON API calls. */
 export async function apiResponse(path:string):Promise<Response>{
-  if(!isDeviceWorkspace())return fetch(path.startsWith('/api/')?path:`/api${path}`,{credentials:'same-origin'});
+  if(!isDeviceWorkspace()&&!sharedCloudSource())return fetch(path.startsWith('/api/')?path:`/api${path}`,{credentials:'same-origin'});
   try{
     const result=await api<unknown>(path);
     return new Response(typeof result==='string'?result:JSON.stringify(result),{headers:{'Content-Type':typeof result==='string'?'text/csv;charset=utf-8':'application/json','Cache-Control':'no-store'}});

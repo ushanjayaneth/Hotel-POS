@@ -355,9 +355,9 @@ test('a POS category and barcoded product can be held, updated, sold on credit a
   expect(created.ok(),await created.text()).toBeTruthy();
   const {order}=await created.json() as {order:Order};
   const payment=page.getByRole('dialog',{name:'Take payment',exact:true});
-  await payment.getByRole('button',{name:'Customer credit',exact:true}).click();
+  await payment.getByRole('button',{name:'Customer Loan',exact:true}).click();
   await payment.getByRole('checkbox').check();
-  await payment.getByRole('button',{name:'Confirm credit sale',exact:true}).click();
+  await payment.getByRole('button',{name:'Confirm customer loan',exact:true}).click();
   const receipt=page.getByRole('dialog',{name:'Order receipt',exact:true});
   await expect(receipt).toBeVisible();
   await receipt.getByRole('button',{name:'Close',exact:true}).click();

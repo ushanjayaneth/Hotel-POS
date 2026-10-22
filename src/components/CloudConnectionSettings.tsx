@@ -1,0 +1,24 @@
+import {useEffect,useState,type FormEvent} from 'react';
+import {Cloud,RefreshCw} from 'lucide-react';
+import {usePOS} from '../lib/context';
+import {isDeviceWorkspace} from '../lib/workspace-mode';
+import {sharedCloudSource} from '../lib/cloud-shared';
+import {cloudRequest,connectDeviceToCloud,disconnectDeviceCloud,getCloudSyncState,syncDeviceCloud,type CloudSyncState} from '../lib/cloud-sync';
+import type {CloudStatus} from '../../shared/cloud-monitor';
+import '../styles/cloud-monitor.css';
+
+export default function CloudConnectionSettings(){
+  const {data}=usePOS();const [state,setState]=useState<CloudSyncState|null>(null),[status,setStatus]=useState<CloudStatus|null>(null);
+  const [email,setEmail]=useState(''),[password,setPassword]=useState(''),[name,setName]=useState('Shop counter'),[busy,setBusy]=useState(false),[error,setError]=useState('');
+  useEffect(()=>{if(!isDeviceWorkspace()||sharedCloudSource())return;const load=()=>void getCloudSyncState().then(setState).catch(()=>{});load();window.addEventListener('cloud-monitor-change',load);void cloudRequest<CloudStatus>('status').then(setStatus).catch(error=>setError(error.message));return()=>window.removeEventListener('cloud-monitor-change',load);},[]);
+  if(data.user.role!=='owner')return null;
+  if(sharedCloudSource())return <section className="panel preference-card"><h2>Shared cloud workspace</h2><p>Changes are confirmed by the cloud database. Other connected devices see the same stock and customer balances.</p><p>Without a cloud connection, keep new orders as drafts until reconnection.</p><a className="button" href="/?cloud=1">Owner live view</a><a className="button button-ghost" href="/?local=1">Open original local device copy</a></section>;
+  if(!isDeviceWorkspace())return null;
+  async function connect(event:FormEvent){event.preventDefault();setBusy(true);setError('');try{await connectDeviceToCloud({email,password,deviceName:name});setPassword('');await syncDeviceCloud();setState(await getCloudSyncState());}catch(error){setError((error as Error).message);}finally{setBusy(false);}}
+  return <section className="panel preference-card cloud-settings"><div className="preference-heading"><div className="preference-icon"><Cloud size={20}/></div><div><h2>Cloud connection & owner live view</h2><p>See this shop’s stock, sales, loans and reports from another device.</p></div></div>
+    {status&&!status.configured&&<div className="error-message" role="status">Cloud setup is required on the server. Missing: {status.missing.join(', ')}. Your local sales continue to work.</div>}
+    {error&&<div className="error-message" role="alert">{error}</div>}
+    {state?<><div className="cloud-summary"><strong>{state.deviceName}</strong><span>{state.pending} changes waiting · Last upload: {state.lastUploadedAt?new Date(state.lastUploadedAt).toLocaleString('en-GB'):'Not uploaded yet'}</span>{state.lastError&&<p role="status">{state.lastError}</p>}</div><div className="preference-actions"><button className="button" disabled={busy||state.needsReconnect} onClick={async()=>{setBusy(true);try{setState(await syncDeviceCloud());}finally{setBusy(false);}}}><RefreshCw size={14}/> Sync now</button><a className="button button-primary" href="/?cloud=1">Owner live view</a>{state.shared&&<a className="button" href={`/?shared=${state.sourceId}`}>Open shared POS</a>}<button className="button button-ghost" disabled={busy} onClick={async()=>{try{await disconnectDeviceCloud();setState(null);}catch(error){setError((error as Error).message);}}}>Disconnect this device</button></div><p className="preference-note">Disconnect stops new uploads. Existing cloud records remain available to the owner until that connection is revoked in Owner live view.</p></>:<form onSubmit={event=>void connect(event)}><div className="form-grid"><label className="field"><span>Cloud owner email</span><input className="input" type="email" autoComplete="username" required value={email} onChange={event=>setEmail(event.target.value)}/></label><label className="field"><span>Cloud owner password</span><input className="input" type="password" autoComplete="current-password" required value={password} onChange={event=>setPassword(event.target.value)}/></label><label className="field"><span>Device label</span><input className="input" required minLength={2} maxLength={100} value={name} onChange={event=>setName(event.target.value)}/></label></div><button className="button button-primary" disabled={busy||status?.configured===false}>{busy?'Connecting…':'Connect this shop device'}</button></form>}
+    <p className="preference-note">Local device changes upload while the app is open and connected. Independent devices remain separate until the owner enables a shared POS workspace. Export a separate encrypted backup regularly.</p>
+  </section>;
+}

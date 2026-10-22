@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { productCost } from "../../../shared/costing";
+import { productCost } from "../../../shared/costing.js";
 import type {
   AuditEvent,
   Branch,
@@ -17,7 +17,7 @@ import type {
   Settings,
   Shift,
   StockMovement,
-} from "../../../shared/types";
+} from "../../../shared/types.js";
 import {
   type LocalRequest,
   now,
@@ -25,7 +25,7 @@ import {
   requireLocal,
   scopeLocal,
   uid,
-} from "./types";
+} from "./types.js";
 
 const identifier = z.string().min(1).max(160);
 const command = z.string().min(8).max(160);
@@ -630,6 +630,7 @@ export async function handleCashier(
         amount,
         received: money.optional(),
         reference: z.string().trim().max(200).default(""),
+        customerId: identifier.optional(),
       })
       .parse(request.body);
     const order = await scopedOrder(request, paymentMatch[1]);
@@ -666,11 +667,30 @@ export async function handleCashier(
         body.reference,
         "Record the approved terminal or bank reference. This system does not charge cards.",
       );
-    const customer = order.customerId
-      ? await store.get<Customer>("customer", order.customerId)
-      : undefined;
+    requireLocal(
+      body.customerId === undefined || body.method === "credit",
+      "A customer can only be selected here for a Customer Loan.",
+    );
+    const customerId = body.method === "credit"
+      ? body.customerId ?? order.customerId
+      : order.customerId;
     if (body.method === "credit")
-      requireLocal(customer, "Select a customer for a credit sale.");
+      requireLocal(customerId, "Select a customer for a Customer Loan.");
+    const customer = customerId
+      ? await store.get<Customer>("customer", customerId)
+      : undefined;
+    if (customerId) requireLocal(customer, "Customer not found.", 404);
+    if (body.method === "credit" && customerId !== order.customerId) {
+      const financialHistory = order.payments.length > 0 || order.paid > 0 || order.refunded > 0 ||
+        (await store.list<CreditEntry>("credit", order.branchId)).some(entry => entry.orderId === order.id) ||
+        (await store.list<Refund>("refund", order.branchId)).some(refund => refund.orderId === order.id);
+      requireLocal(
+        !financialHistory,
+        "The customer cannot be changed after a payment or Customer Loan has been recorded.",
+        409,
+        "CUSTOMER_LOCKED",
+      );
+    }
     const timestamp = now();
     const payment: Payment = {
       id: uid("payment"),
@@ -685,6 +705,7 @@ export async function handleCashier(
     const paid = checkedMoney(order.paid + body.amount);
     const updated: Order = {
       ...order,
+      customerId,
       paid,
       paymentStatus: paid === order.total ? "paid" : "partial",
       payments: [...order.payments, payment],

@@ -98,6 +98,18 @@
   font-size: 12px;
   overflow-wrap: anywhere;
 }
+.loan-customer-change {
+  align-self: flex-start;
+  border: 0;
+  background: transparent;
+  color: var(--mint);
+  font: inherit;
+  font-size: 11px;
+  padding: 6px 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
 .shift-pill {
   font-size: 10px;
   color: #a6b4a8;

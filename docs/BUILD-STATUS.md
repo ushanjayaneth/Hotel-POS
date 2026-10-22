@@ -4,6 +4,11 @@ This repository contains a working local evaluation version of DEMO HOTEL. It is
 
 ## Implemented
 
+- Optional Vercel/Firebase owner live view, device baseline/journal uploads with durable retry, private owner sessions and scoped device grants; requires the real server credentials and deployment checks in [CLOUD-SYNC.md](CLOUD-SYNC.md).
+- Optional shared **online owner** POS with atomic cloud stock checks and command replay. Local staff PIN migration and automatic offline financial merging remain outside this feature.
+- Separate network/cloud status dots, touch quantity/amount numpads, compatible recipe weight/volume conversions, and captured-cost wastage logs/exports with operating-estimate deductions.
+- Safe manual PWA updates that flush drafts, stop on failed/pending storage and do not reload other active tabs automatically.
+
 - English desktop, tablet, and phone interface with the dark glass design.
 - PIN sessions, server-side staff roles, branch access, and audit records.
 - Menu and recipe editing, cashier search, persistent device drafts, tables, kitchen tickets, and preparation status.
@@ -28,7 +33,7 @@ This repository contains a working local evaluation version of DEMO HOTEL. It is
 
 ## Required before a live single-branch pilot
 
-- Select device or shared-hub topology. Device workspaces are independent and do not synchronize financial/stock records between devices.
+- Select device or shared-hub topology. Independent device workspaces remain separate. Configure owner monitoring or explicitly promote a verified source to shared online POS; devices must then use the shared URL.
 - Independent backup storage and restore drills for the selected mode. Browser quota/persistence remains controlled by the platform; installed PWAs are not independent backups.
 - Trusted HTTPS/DNS and, for hub mode, service supervision and a protected database directory.
 - If Firebase replication is required: authorized server identity, receiver hosting, secure branch credentials, deployed access rules, and real end-to-end replication/recovery checks. The repository's rules and receiver code are not evidence that the actual project is connected.
@@ -38,11 +43,11 @@ This repository contains a working local evaluation version of DEMO HOTEL. It is
 ## Remaining from the full master plan
 
 - Complete cross-branch transfer, receipt/discrepancy, and central command workflows across independent hubs.
-- Consolidated cloud-backed head-office application; the current branch selector evaluates locally stored sample branches.
+- Consolidation and inter-branch operational controls across independent cloud sources. The owner dashboard filters one source/branch at a time.
 - Full double-entry accounting, accrual financial statements, supplier settlements, and closing-period controls. Customer credit collections and cash-flow statements are implemented.
 - Advanced purchasing approvals, costing corrections, stock-count sessions, batch expiry policies, modifiers, and combo mapping.
 - Controlled offline authorization leases, managed enrollment, automatic encrypted second-device backup, and standby promotion with receipt-series recovery.
 - Safe standalone-to-hub migration, automatic device financial/stock journal merging, and central management across independent device workspaces. Photo copying does not provide those capabilities.
-- Hardware print queues/cash drawer support, payment provider integrations, loyalty, attendance/payroll, catering, and online ordering as scoped.
+- Raw ESC/POS/cash drawer/auto-cutter drivers and automatic kitchen/bar/counter KOT routing; physical printer integration is still required. Payment provider integrations, loyalty, attendance/payroll, catering and online ordering remain as scoped.
 
 The standalone workflow and its storage/backup limitations are documented in [DEVICE-WORKSPACE.md](DEVICE-WORKSPACE.md). This status describes implemented scope and remaining deployment work; it does not promise a completion date for the broader master plan.

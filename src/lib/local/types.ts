@@ -1,5 +1,5 @@
-import type {AuditEvent, Role, User} from '../../../shared/types';
-import type {LocalStore} from './db';
+import type {AuditEvent, Role, User} from '../../../shared/types.js';
+import type {LocalStore} from './db.js';
 
 export interface LocalRequest {
   path: string;

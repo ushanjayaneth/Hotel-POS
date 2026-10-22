@@ -1,6 +1,7 @@
 import ProductPhoto from '../components/ProductPhoto';
 import PhotoPicker from '../components/PhotoPicker';
 import ProfitSummary from '../components/ProfitSummary';
+import WastageLog from '../components/WastageLog';
 import {apiResponse} from '../lib/api';
 import {isDeviceWorkspace} from '../lib/workspace-mode';
 import {
@@ -52,7 +53,8 @@ import type {
   Shift,
 } from "../../shared/types";
 import { usePOS } from "../lib/context";
-import { portionIngredients } from "../../shared/costing";
+import { portionIngredients, productCost } from "../../shared/costing";
+import {compatibleUnits,convertQuantity} from '../../shared/units';
 import { money, number, dateTime, commandId } from "../lib/format";
 import { useBackLayer } from "../lib/navigation";
 import { WorkspacePreferences } from "../components/WorkspacePreferences";
@@ -292,7 +294,7 @@ export default function Management({ page }: { page: Page }) {
   const [menuStockMode, setMenuStockMode] =
     useState<MenuItem["stockMode"]>("prepared");
   const [recipeLines, setRecipeLines] = useState<
-    { key: string; quantity: string }[]
+    { key: string; quantity: string; unit?:string }[]
   >([{ key: "", quantity: "" }]);
   const [recipeYield, setRecipeYield] = useState("1");
   const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
@@ -935,8 +937,9 @@ export default function Management({ page }: { page: Page }) {
   const ingredients = inventory.filter(
     (item) => ["ingredient", "packaging"].includes(item.category),
   );
+  const recipeStockQuantity=(line:{key:string;quantity:string;unit?:string},strict=false)=>{const item=ingredients.find(item=>ingredientKey(item)===line.key);try{return item?convertQuantity(Number(line.quantity||0),line.unit??item.unit,item.unit):Number(line.quantity||0);}catch(error){if(strict)throw error;return 0;}};
   const recipeBatchCost = Math.round(recipeLines.reduce((sum, line) => sum +
-    (ingredients.find(item => ingredientKey(item) === line.key)?.unitCost || 0) * Number(line.quantity || 0), 0));
+    (ingredients.find(item => ingredientKey(item) === line.key)?.unitCost || 0) * recipeStockQuantity(line), 0));
   const recipePortionCost = Number(recipeYield) > 0 ? Math.round(recipeBatchCost / Number(recipeYield)) : 0;
   const startRecipe = (item: MenuItem) => {
     setEditingMenu(item);
@@ -1034,7 +1037,7 @@ export default function Management({ page }: { page: Page }) {
                     <td>
                       <strong>{money(item.price)}</strong>
                     </td>
-                    <td>{money(item.cost)}</td>
+                    <td>{money(productCost(item,data.inventory,data.recipes,branchId).unitCost)}</td>
                     <td>
                       <Pill
                         tone={item.stockMode === "untracked" ? "" : "green"}
@@ -1412,6 +1415,7 @@ export default function Management({ page }: { page: Page }) {
       {header}
       {(page === "reports" || page === "finance") && financialDownloads}
       {page === "settings" && <WorkspacePreferences />}
+      {page === "inventory" && <WastageLog/>}
       {["overview","finance","reports"].includes(page)&&<ProfitSummary data={data}/>}
       {page === "overview" && (
         <>
@@ -3213,7 +3217,7 @@ export default function Management({ page }: { page: Page }) {
                   () => {
                     const enteredLines = recipeLines.map((line) => ({
                       key: line.key,
-                      quantity: Number(line.quantity),
+                      quantity: recipeStockQuantity(line,true),
                     }));
                     const batchYield = Number(recipeYield);
                     const lines = portionIngredients(enteredLines, batchYield);
@@ -3273,7 +3277,7 @@ export default function Management({ page }: { page: Page }) {
                             setRecipeLines(
                               recipeLines.map((line, i) =>
                                 i === index
-                                  ? { ...line, key: event.target.value }
+                                  ? { ...line, key: event.target.value,unit:undefined }
                                   : line,
                               ),
                             )
@@ -3292,7 +3296,7 @@ export default function Management({ page }: { page: Page }) {
                           )}
                         </select>
                       </Field>
-                      <Field label={`Batch quantity${item ? ` (${item.unit})` : ""}`}>
+                      <Field label={`Batch quantity${item ? ` (${line.unit??item.unit})` : ""}`}>
                         <input
                           className="input"
                           type="number"
@@ -3311,6 +3315,7 @@ export default function Management({ page }: { page: Page }) {
                             )
                           }
                         />
+                        {item&&<select className="select" aria-label={`Quantity unit ${index+1}`} value={line.unit??item.unit} onChange={event=>{const unit=event.target.value;setRecipeLines(previous=>previous.map((row,i)=>i===index?{...row,unit,quantity:row.quantity&&Number(row.quantity)>=0?String(convertQuantity(Number(row.quantity),row.unit??item.unit,unit)):''}:row));}}>{compatibleUnits(item.unit).map(unit=><option key={unit} value={unit}>{unit}</option>)}</select>}
                       </Field>
                       <button
                         className="icon-button"

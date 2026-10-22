@@ -1,4 +1,4 @@
-import type {InventoryItem, MenuItem, Recipe} from './types';
+import type {InventoryItem, MenuItem, Recipe} from './types.js';
 
 export interface ProductStockState {quantity:number|null;threshold:number;low:boolean;unit:string}
 

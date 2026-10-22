@@ -152,6 +152,8 @@ export interface StockMovement {
   reason: string;
   createdAt: string;
   createdBy: string;
+  unitCost?:number;
+  totalCost?:number;
 }
 export interface ProductionBatch {
   id: string;

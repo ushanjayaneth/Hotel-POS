@@ -27,12 +27,13 @@ First setup and app caching need an online connection. After caching, test offli
 
 Use **Hold bill** to return to an unfinished basket. A held bill does not reserve stock. If a save fails, read the error and check the saved order/history before retrying. Do not assume that a failed print means a failed payment.
 
-## Credit customers and instalments
+## Customer Loan and instalments
 
-1. Add the items, choose **Sell on credit**, and select an existing customer or add one with the correct name and phone number.
-2. Confirm the customer and credit amount, then confirm the credit sale.
-3. In **Customers & dues**, open **Ledger & collect** to review the credited bills/items and balance.
-4. When money is received, enter the amount actually paid and the payment method. Cash collections need an open cash shift.
+1. Add the items and choose **Customer Loan**. Choose **Existing customer** to reuse a saved account, or **New customer** to enter a name and phone number. Email is optional. Check the details and outstanding balance, then choose **Continue to loan**.
+2. Review the account and amount in **Take payment**, tick the authorization confirmation, then choose **Confirm customer loan**. Before any payments or refunds have been recorded, **Change customer** lets you correct the account.
+3. You can also choose **Charge order → Customer Loan** and add/select the customer directly there; selecting a customer before checkout is optional. Cancelling the chooser creates no debt. An order already submitted remains in **Orders** if payment is cancelled.
+4. In **Customers & dues**, open **Ledger & collect** to review the credited bills/items and balance. Select the same saved customer on their next loan.
+5. When money is received, enter the amount actually paid and the payment method. Cash collections need an open cash shift.
 
 Customers may pay in parts: collecting LKR 300 against LKR 1,000 leaves LKR 700. Record the next instalment when received. Each collection keeps its own history; never enter the original sale again to record a repayment.
 

@@ -186,7 +186,7 @@ export async function buildBackupPayload(db:LocalDatabase=localDb):Promise<Backu
   const pending=tables.metadata.find(item=>item.key==='pendingRestoredDrafts')?.value;
   const drafts=pending!==undefined?pendingDrafts.parse(pending).drafts:await browserDb.drafts.filter(item=>item.id.startsWith('device:')).toArray();
   // Operational authentication state is deliberately excluded from the file.
-  tables.metadata=tables.metadata.filter(item=>!['loginThrottle','pendingRestoredDrafts'].includes(item.key));
+  tables.metadata=tables.metadata.filter(item=>!['loginThrottle','pendingRestoredDrafts'].includes(item.key)&&!item.key.startsWith('cloudMonitor:'));
   return validateDeviceBackupPayload({format:'demo-hotel-device-data',version:1,createdAt:new Date().toISOString(),tables,drafts});
 }
 
@@ -242,7 +242,7 @@ export async function restoreDeviceBackup(input:BackupPayload,db:LocalDatabase=l
   const tokenHash=await localSessionHash(db);
   const original=workspace.parse(value.tables.metadata.find(item=>item.key==='workspace')?.value);
   const deviceId=uid('device'),restoreId=uid('restore'),restoredAt=new Date().toISOString();
-  const metadataRows=value.tables.metadata.filter(item=>!['pendingRestoredDrafts','loginThrottle'].includes(item.key)&&!item.key.startsWith('photo-uploaded:'));
+  const metadataRows=value.tables.metadata.filter(item=>!['pendingRestoredDrafts','loginThrottle'].includes(item.key)&&!item.key.startsWith('photo-uploaded:')&&!item.key.startsWith('cloudMonitor:'));
   try{
     await db.transaction('rw',db.tables,async()=>{
       const populated=await db.records.count()||await db.credentials.count()||await db.commands.count()||await db.journal.count()

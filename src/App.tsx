@@ -9,6 +9,7 @@ import {
   ChevronRight,
   ClipboardList,
   CookingPot,
+  Cloud,
   Flame,
   Grid2X2,
   History,
@@ -55,6 +56,11 @@ import {getLocalWorkspaceInfo,type LocalWorkspaceInfo} from './lib/local/core';
 import {recoverRestoredDrafts} from './lib/local/backup';
 import {DeviceSetup,InitialDeviceRestore} from './components/DeviceSetup';
 import {syncLocalProductPhotos} from './lib/media';
+import {flushBeforeAppUpdate} from './lib/update-safety';
+import {sharedCloudSource} from './lib/cloud-shared';
+import {cloudRequest,syncDeviceCloud} from './lib/cloud-sync';
+import CloudMonitor from './components/CloudMonitor';
+import ConnectivityStatus from './components/ConnectivityStatus';
 
 // Optional UI preferences must never block access to committed business records.
 const uiStorage = {
@@ -241,6 +247,7 @@ function Login({ onLogin,onSetup,onRestore,deviceInfo }: { onLogin: (user: User)
           {mode==='hub'&&<div className="device-login-option"><div className="login-divider">work on this device</div>{deviceInfo?<button type="button" className="button full-width" onClick={()=>setWorkspaceMode('device')}><Database size={15}/> Open saved device workspace</button>:<><button type="button" className="button full-width" onClick={onSetup}><Database size={15}/> Set up this device</button><button type="button" className="button button-ghost full-width" onClick={onRestore}>Restore device backup</button><p className="demo-caption">Keep your workspace on this device. No hosted backend required.</p></>}</div>}
           {mode==='device'&&<><p className="demo-caption">{deviceInfo?'Saved on this device · Setup complete':'Device data is unavailable. Restore your backup or create a new workspace.'}<br/><button type="button" className="button button-ghost button-small" onClick={()=>setWorkspaceMode('hub')}>Use branch hub instead</button></p>{!deviceInfo&&<div className="device-login-option"><button type="button" className="button full-width" onClick={onRestore}>Restore device backup</button><button type="button" className="button button-ghost full-width" onClick={onSetup}>Set up this device</button></div>}</>}
         </form>
+        <a className="button button-ghost" href="/?cloud=1"><Cloud size={14}/> Owner live view / shared cloud POS</a>
         <div className="login-bottom">
           <ShieldCheck size={12} /> Your session stays on this device.
         </div>
@@ -251,11 +258,15 @@ function Login({ onLogin,onSetup,onRestore,deviceInfo }: { onLogin: (user: User)
 
 function WorkspaceApp() {
   const mode=useWorkspaceMode();
-  const deviceMode=mode==='device';
+  const deviceMode=mode==='device'&&!sharedCloudSource();
   const [deviceInfo,setDeviceInfo]=useState<LocalWorkspaceInfo|null>(null);
   const [deviceSetup,setDeviceSetup]=useState(false);
   const [deviceRestore,setDeviceRestore]=useState(false);
   const localWrites=useRef(0);
+  const updateActivated=useRef(false);
+  const updateRequested=useRef(false);
+  const updateReloading=useRef(false);
+  const updateActivationTimer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined);
   const {route,navigate:routeTo,back}=useNavigation();
   const preferences=useDevicePreferences();
   const [user, setUser] = useState<User | null>(null);
@@ -267,6 +278,15 @@ function WorkspaceApp() {
   const page=route.page;
   const [loadError, setLoadError] = useState("");
   const [hubOnline, setHubOnline] = useState(true);
+  useEffect(()=>{
+    if(!deviceMode||!user)return;
+    let timer:ReturnType<typeof setTimeout>|undefined;
+    const upload=()=>{if(navigator.onLine!==false)void syncDeviceCloud().catch(()=>{});};
+    const change=()=>{clearTimeout(timer);timer=setTimeout(upload,1000);};
+    upload();const interval=setInterval(upload,30000);
+    window.addEventListener('online',upload);window.addEventListener('focus',upload);window.addEventListener('local-workspace-change',change);
+    return()=>{clearTimeout(timer);clearInterval(interval);window.removeEventListener('online',upload);window.removeEventListener('focus',upload);window.removeEventListener('local-workspace-change',change);};
+  },[deviceMode,user]);
   const [mobileNav, setMobileNav] = useState(false);
   const [notifications, setNotifications] = useState(false);
   const selectedOrder=route.orderId;
@@ -299,16 +319,59 @@ function WorkspaceApp() {
     },
     [],
   );
+  const checkAppUpdate = useCallback(async () => {
+    if (navigator.onLine === false || !("serviceWorker" in navigator)) return;
+    try {
+      const registration = await navigator.serviceWorker.getRegistration();
+      if (!registration) return;
+      if (registration.waiting) setUpdateReady(true);
+      await registration.update();
+      if (registration.waiting) setUpdateReady(true);
+    } catch {
+      /* An unavailable update must not interrupt local sales or stored drafts. */
+    }
+  }, []);
+  const finishAppUpdate = useCallback(async () => {
+    if (updateReloading.current) return;
+    updateReloading.current = true;
+    try {
+      if (localWrites.current > 0) throw new Error('Wait for the current save to finish before reloading the app.');
+      await flushBeforeAppUpdate();
+      // A payment may start while a worker activates or a draft is being flushed.
+      if (localWrites.current > 0) throw new Error('Wait for the current save to finish before reloading the app.');
+      window.location.reload();
+    } catch (error) {
+      updateRequested.current = false;
+      updateReloading.current = false;
+      notify((error as Error).message, 'error');
+    }
+  }, [notify]);
   useEffect(() => {
     const checkForUpdate=()=>{
-      if(navigator.onLine===false||document.visibilityState!=='visible')return;
-      void navigator.serviceWorker?.getRegistration().then(registration=>registration?.update()).catch(()=>{});
+      if(document.visibilityState==='visible')void checkAppUpdate();
+    };
+    const workerActivated = () => {
+      clearTimeout(updateActivationTimer.current);
+      updateActivated.current = true;
+      setUpdateReady(true);
+      // Activation in another tab never grants permission to reload this page.
+      if (updateRequested.current) void finishAppUpdate();
+    };
+    let previousController = navigator.serviceWorker?.controller;
+    const controllerChanged = () => {
+      const next = navigator.serviceWorker.controller;
+      if (previousController && next !== previousController) workerActivated();
+      previousController = next;
     };
     const update = registerSW({
       immediate:true,
       onNeedRefresh() {
         setUpdateReady(true);
       },
+      onRegisteredSW(_url, registration) {
+        if (registration?.waiting) setUpdateReady(true);
+      },
+      onNeedReload: workerActivated,
       onRegisterError() {
         /* Local network use remains available without PWA installation. */
       },
@@ -317,12 +380,51 @@ function WorkspaceApp() {
     window.addEventListener('focus',checkForUpdate);
     window.addEventListener('online',checkForUpdate);
     document.addEventListener('visibilitychange',checkForUpdate);
-    return()=>{window.removeEventListener('focus',checkForUpdate);window.removeEventListener('online',checkForUpdate);document.removeEventListener('visibilitychange',checkForUpdate);};
-  }, []);
+    navigator.serviceWorker?.addEventListener('controllerchange',controllerChanged);
+    const timer = window.setInterval(checkForUpdate, 5 * 60 * 1000);
+    return()=>{window.clearInterval(timer);clearTimeout(updateActivationTimer.current);window.removeEventListener('focus',checkForUpdate);window.removeEventListener('online',checkForUpdate);document.removeEventListener('visibilitychange',checkForUpdate);navigator.serviceWorker?.removeEventListener('controllerchange',controllerChanged);};
+  }, [checkAppUpdate,finishAppUpdate]);
+  async function reloadAppUpdate() {
+    if (updateReloading.current) return;
+    if (localWrites.current > 0) {
+      notify('Wait for the current save to finish before reloading the app.', 'error');
+      return;
+    }
+    if (!updateWorker) {
+      notify('The app update is not ready. Refresh the workspace and try again.', 'error');
+      return;
+    }
+    try {
+      if (updateActivated.current) {
+        updateRequested.current = true;
+        await finishAppUpdate();
+        return;
+      }
+      const registration = await navigator.serviceWorker.getRegistration();
+      if (updateActivated.current) {
+        updateRequested.current = true;
+        await finishAppUpdate();
+        return;
+      }
+      if (!registration?.waiting) throw new Error('No waiting worker is available.');
+      updateRequested.current = true;
+      clearTimeout(updateActivationTimer.current);
+      updateActivationTimer.current = setTimeout(() => {
+        if (!updateRequested.current || updateActivated.current) return;
+        updateRequested.current = false;
+        notify('The app update has not finished activating. Keep this page open and click Reload again.', 'error');
+      }, 10000);
+      await updateWorker(true);
+    } catch {
+      clearTimeout(updateActivationTimer.current);
+      updateRequested.current = false;
+      notify('The app update could not be applied. Keep this app open and try Reload again.', 'error');
+    }
+  }
   useEffect(() => {
     let active = true;
     setStarting(true);setUser(null);setData(null);setLoadError('');
-    setBranchId(uiStorage.getItem(deviceMode?'dh-device-branch':'dh-branch')||'b1');
+    setBranchId(uiStorage.getItem(sharedCloudSource()?`dh-cloud-branch:${sharedCloudSource()}`:deviceMode?'dh-device-branch':'dh-branch')||'b1');
     void (async()=>{
       const info=await getLocalWorkspaceInfo().catch(()=>null);
       if(!active)return null;
@@ -355,13 +457,14 @@ function WorkspaceApp() {
   const refresh = useCallback(async () => {
     if (!user) return;
     const generation = ++requestGeneration.current;
-    const cacheKey = `${user.id}:${branchId}`;
+    const cacheKey = sharedCloudSource()?`cloud:${sharedCloudSource()}:${user.id}:${branchId}`:`${user.id}:${branchId}`;
     try {
       const snapshot = await api<Snapshot>(
         `/bootstrap?branchId=${encodeURIComponent(branchId)}`,
       );
       if (generation !== requestGeneration.current) return;
       setData(snapshot);
+      if(sharedCloudSource())uiStorage.setItem('dh-cloud-preferred-source',sharedCloudSource()!);
       setHubOnline(true);
       setLoadError("");
       if(!deviceMode)await browserDb.snapshots
@@ -409,12 +512,13 @@ function WorkspaceApp() {
     }
     const interval = setInterval(() => {
       if (document.visibilityState === "visible") void refresh();
-    }, 12000);
+    }, sharedCloudSource()?5000:12000);
     return () => clearInterval(interval);
   }, [refresh]);
   useEffect(() => {
     if (!user) return;
     const permitted = allowedPages[user.role] || ["pos"];
+    if(sharedCloudSource()&&page==='team'){routeTo('pos',null,true);return;}
     if (!permitted.includes(page)) routeTo(permitted[0] as Page,null,true);
   }, [user, page,routeTo]);
   const mutate = useCallback(
@@ -476,6 +580,7 @@ function WorkspaceApp() {
     setStarting(false);
   }
   if (starting) return <Spinner />;
+  if (!user&&sharedCloudSource())return <CloudMonitor sharedSource={sharedCloudSource()!}/>;
   if (!user) return <><Login onLogin={onLogin} onSetup={()=>setDeviceSetup(true)} onRestore={()=>setDeviceRestore(true)} deviceInfo={deviceInfo}/>{deviceSetup&&<DeviceSetup onClose={()=>setDeviceSetup(false)} onComplete={(next)=>{setDeviceSetup(false);setBranchId('b1');setUser(next);uiStorage.setItem('dh-device-last-user',JSON.stringify(next));void getLocalWorkspaceInfo().then(setDeviceInfo);}}/>}{deviceRestore&&<InitialDeviceRestore onClose={()=>setDeviceRestore(false)}/>}</>;
   if (!data || data.branch.id !== branchId) {
     if (loadError)
@@ -529,7 +634,7 @@ function WorkspaceApp() {
               <div key={group.label}>
                 <div className="nav-label">{group.label}</div>
                 {group.items
-                  .filter((item) => visiblePages.includes(item.id))
+                  .filter((item) => visiblePages.includes(item.id)&&(!sharedCloudSource()||item.id!=='team'))
                   .map((item) => (
                     <button
                       key={item.id}
@@ -590,6 +695,7 @@ function WorkspaceApp() {
               <strong>{title}</strong>
             </div>
             <div className="topbar-actions">
+              <ConnectivityStatus/>
               <span className="topbar-date">
                 {new Intl.DateTimeFormat("en-GB", {
                   weekday: "short",
@@ -606,7 +712,7 @@ function WorkspaceApp() {
                   disabled={!!user.branchId}
                   onChange={(e) => {
                     setBranchId(e.target.value);
-                    uiStorage.setItem(deviceMode?'dh-device-branch':'dh-branch', e.target.value);
+                    uiStorage.setItem(sharedCloudSource()?`dh-cloud-branch:${sharedCloudSource()}`:deviceMode?'dh-device-branch':'dh-branch', e.target.value);
                     routeTo(page,null,true);
                   }}
                 >
@@ -619,7 +725,7 @@ function WorkspaceApp() {
               </label>
               <button
                 className="icon-button refresh-button"
-                onClick={() => void refresh()}
+                onClick={() => {void refresh();void checkAppUpdate();}}
                 title="Refresh workspace"
                 aria-label="Refresh workspace"
               >
@@ -745,7 +851,7 @@ function WorkspaceApp() {
             </span>
             <button
               className="button button-primary button-small"
-              onClick={() => void updateWorker?.(true)}
+              onClick={() => void reloadAppUpdate()}
             >
               Reload
             </button>
@@ -772,4 +878,19 @@ function WorkspaceApp() {
   );
 }
 
-export default function App(){return <NavigationProvider><WorkspaceApp/></NavigationProvider>;}
+function SharedCloudGate(){
+  const [ready,setReady]=useState<boolean|null>(null);
+  useEffect(()=>{void cloudRequest<{authenticated:boolean}>('session').then(value=>setReady(value.authenticated)).catch(()=>setReady(false));},[]);
+  if(ready===null)return <Spinner label="Connecting to shared cloud POS"/>;
+  return ready?<NavigationProvider><WorkspaceApp/></NavigationProvider>:<CloudMonitor sharedSource={sharedCloudSource()!}/>;
+}
+function PreferredCloudRedirect({source}:{source:string}){useEffect(()=>{location.replace(`/?shared=${encodeURIComponent(source)}`);},[source]);return <Spinner label="Opening your shared workspace"/>;}
+export default function App(){
+  const params=new URLSearchParams(location.search);
+  useEffect(()=>{if(params.has('local'))uiStorage.removeItem('dh-cloud-preferred-source');},[]);
+  if(sharedCloudSource())return <SharedCloudGate/>;
+  if(params.has('cloud'))return <CloudMonitor/>;
+  const preferred=params.has('local')?null:uiStorage.getItem('dh-cloud-preferred-source');
+  if(preferred&&/^[A-Za-z0-9_-]{1,160}$/.test(preferred))return <PreferredCloudRedirect source={preferred}/>;
+  return <NavigationProvider><WorkspaceApp/></NavigationProvider>;
+}

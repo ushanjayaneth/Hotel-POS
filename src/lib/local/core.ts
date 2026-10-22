@@ -1,17 +1,17 @@
 import Dexie from 'dexie';
 import {ZodError} from 'zod';
-import type {AuditEvent, Branch, Category, CreditEntry, Customer, DiningTable, Expense, HeldBill, InventoryItem, MenuItem, Order, ProductionBatch, Purchase, Recipe, Role, Settings, Shift, Snapshot, StaffMember, StockMovement, Supplier, User} from '../../../shared/types';
-import {localDb, LocalStore, type LocalDatabase, type LocalChange} from './db';
-import {forgetLocalSession, getLocalUser, localPinFingerprint, localSessionHash, loginLocal, logoutLocal, publicLocalUser} from './auth';
-import {getLocalWorkspaceInfo, initializeLocalWorkspace} from './seed';
-import {handleCashier} from './cashier';
-import {handleCatalog} from './catalog';
-import {handleMedia} from './media';
-import {LocalError, localStorageError, now, requireLocal, scopeLocal, sha256, stable, uid, type LocalRequest} from './types';
-import {productStockState} from '../../../shared/stock';
+import type {AuditEvent, Branch, Category, CreditEntry, Customer, DiningTable, Expense, HeldBill, InventoryItem, MenuItem, Order, ProductionBatch, Purchase, Recipe, Role, Settings, Shift, Snapshot, StaffMember, StockMovement, Supplier, User} from '../../../shared/types.js';
+import {localDb, LocalStore, type LocalDatabase, type LocalChange} from './db.js';
+import {forgetLocalSession, getLocalUser, localPinFingerprint, localSessionHash, loginLocal, logoutLocal, publicLocalUser} from './auth.js';
+import {getLocalWorkspaceInfo, initializeLocalWorkspace} from './seed.js';
+import {handleCashier} from './cashier.js';
+import {handleCatalog} from './catalog.js';
+import {handleMedia} from './media.js';
+import {LocalError, localStorageError, now, requireLocal, scopeLocal, sha256, stable, uid, type LocalRequest} from './types.js';
+import {productStockState} from '../../../shared/stock.js';
 
 export {getLocalUser, getLocalWorkspaceInfo, initializeLocalWorkspace};
-export type {LocalWorkspaceInfo} from './types';
+export type {LocalWorkspaceInfo} from './types.js';
 const sales: Role[] = ['owner','manager','cashier','waiter'];
 const financial: Role[] = ['owner','manager','cashier','accountant'];
 const management: Role[] = ['owner','manager'];
@@ -24,7 +24,7 @@ function publicOrder(user: User, order: Order): Order {
   if (user.role === 'kitchen') return {...order,customerId:null,subtotal:0,discount:0,cartDiscount:0,tax:0,serviceCharge:0,total:0,paid:0,refunded:0,payments:[],lines:lines.map(line=>({...line,unitPrice:0,discount:0,lineTotal:0}))};
   return {...order,lines,...(user.role==='waiter'?{payments:[]}:{})};
 }
-async function bootstrap(store: LocalStore, user: User, query: URLSearchParams): Promise<Snapshot> {
+export async function bootstrap(store: LocalStore, user: User, query: URLSearchParams): Promise<Snapshot> {
   const branches = await store.list<Branch>('branch');
   const branchId = await scopeLocal(store, user, query.get('branchId') ?? user.branchId ?? await store.meta<string>('activeBranchId') ?? branches[0]?.id ?? 'b1');
   const isFinance = financial.includes(user.role), isManagement = management.includes(user.role);
@@ -53,7 +53,7 @@ async function bootstrap(store: LocalStore, user: User, query: URLSearchParams):
     orders:sales.includes(user.role)||user.role==='kitchen'||isFinance?orders.sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).map(order=>publicOrder(user,order)):[],
     heldBills:sales.includes(user.role)?heldBills.filter(bill=>bill.status==='held').sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)):[],
     creditEntries:isFinance?credits.sort((a,b)=>b.createdAt.localeCompare(a.createdAt)):[],
-    inventory:isStore?inventory.map(item=>maySeeCosts?item:{...item,unitCost:0}):[],stockMovements:isStore?movements.sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).slice(0,500):[],
+    inventory:isStore?inventory.map(item=>maySeeCosts?item:{...item,unitCost:0}):[],stockMovements:isStore?movements.sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).filter((row,index)=>index<500||row.type==='waste').map(row=>maySeeCosts?row:{...row,unitCost:undefined,totalCost:undefined}):[],
     production:productionRoles.includes(user.role)||user.role==='accountant'?production.sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).map(item=>maySeeCosts?item:{...item,cost:0}):[],
     suppliers:stores.includes(user.role)||user.role==='accountant'?suppliers.map(supplier=>user.role==='owner'?supplier:{...supplier,balance:purchases.filter(item=>item.supplierId===supplier.id).reduce((sum,item)=>sum+item.total,0)}):[],
     purchases:stores.includes(user.role)||user.role==='accountant'?purchases.sort((a,b)=>b.createdAt.localeCompare(a.createdAt)):[],

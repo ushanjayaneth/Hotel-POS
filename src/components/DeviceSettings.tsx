@@ -1,4 +1,5 @@
 import {isDeviceWorkspace} from '../lib/workspace-mode';
+import {sharedCloudSource} from '../lib/cloud-shared';
 import {useCallback, useEffect, useRef, useState} from 'react';
 import {Check, CheckCircle2, CircleHelp, Clock3, Printer, RefreshCw, ScanBarcode, Unplug, Usb, Wifi, XCircle} from 'lucide-react';
 import type {NetworkPrinterCheck, PrinterDevice, PrinterDiscovery} from '../../shared/types';
@@ -31,7 +32,7 @@ export default function DeviceSettings() {
   const [lastScan, setLastScan] = useState<ScannerInputResult | null>(null);
   const [scanError, setScanError] = useState('');
   const scanTiming = useRef<{started: number | null; count: number; pasted: boolean}>({started: null, count: 0, pasted: false});
-  const canInspect = !isDeviceWorkspace() && ['owner', 'manager', 'cashier'].includes(data.user.role);
+  const canInspect = !isDeviceWorkspace() && !sharedCloudSource() && ['owner', 'manager', 'cashier'].includes(data.user.role);
 
   useEffect(() => {
     const saved = loadPrinterPreference(branchId);

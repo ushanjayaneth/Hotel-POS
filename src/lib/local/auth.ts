@@ -1,7 +1,7 @@
 import Dexie from 'dexie';
-import type {StaffMember, User} from '../../../shared/types';
-import {localDb, LocalStore, type LocalCredential, type LocalDatabase} from './db';
-import {LocalError, now, requireLocal, sha256, uid} from './types';
+import type {StaffMember, User} from '../../../shared/types.js';
+import {localDb, LocalStore, type LocalCredential, type LocalDatabase} from './db.js';
+import {LocalError, now, requireLocal, sha256, uid} from './types.js';
 
 const iterations = 600_000;
 const sessionLifetime = 12 * 60 * 60 * 1000;

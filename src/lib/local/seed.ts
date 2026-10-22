@@ -1,7 +1,7 @@
-import type {Branch, Category, DiningTable, InventoryItem, MenuItem, Recipe, Settings, Shift, StaffMember, User} from '../../../shared/types';
-import {localDb, LocalStore, type LocalDatabase} from './db';
-import {createLocalCredential, loginLocal, prepareLocalSession, publicLocalUser, rememberLocalSession} from './auth';
-import {localStorageError, now, requireLocal, uid, type LocalWorkspaceInfo} from './types';
+import type {Branch, Category, DiningTable, InventoryItem, MenuItem, Recipe, Settings, Shift, StaffMember, User} from '../../../shared/types.js';
+import {localDb, LocalStore, type LocalDatabase} from './db.js';
+import {createLocalCredential, loginLocal, prepareLocalSession, publicLocalUser, rememberLocalSession} from './auth.js';
+import {localStorageError, now, requireLocal, uid, type LocalWorkspaceInfo} from './types.js';
 
 export interface InitializeLocalWorkspaceInput {businessName: string; ownerName: string; pin: string; demo?: boolean}
 export const localReceiptDefaults = {receiptPaperWidthMm: 80, receiptContentWidthMm: 72, receiptMarginMm: 2, receiptOffsetMm: 0, receiptFontSize: 10};

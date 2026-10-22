@@ -61,7 +61,8 @@ Record **Pass**, **Fail**, or **Not tested** and evidence/date. Use an isolated 
 | LKR discounts | Two LKR 350 units less LKR 50 line discount and LKR 20 cart discount give LKR 630 before applicable charges. Unauthorized roles cannot apply discounts. | |
 | Stock | Confirmation consumes the correct quantity once; holding a bill does not consume stock. Check purchase receiving and a production batch where used. | |
 | Low stock | Set one product's threshold; at or below it the POS card has a thin orange outline. Check another product independently and the default 5. | |
-| Credit customer | Choose/create a customer in POS; credit sale retains customer details, bill items, and outstanding balance in Customers & dues. | |
+| Customer Loan | From the register or Take payment, add a customer with name/phone or select a saved customer; check the balance and confirm. The bill/items and debt appear under that account in Customers & dues. Reusing the account adds to its balance without duplicating the customer. | |
+| Loan correction / cancellation | Before any payment/refund, Change customer selects the intended account. Cancelling a chooser records no debt; cancelling payment leaves the submitted order recoverable in Orders. | |
 | Partial repayment | A LKR 1,000 balance less a LKR 300 collection leaves LKR 700, with the collection date/method recorded. The original sale is not counted twice. | |
 | Reports | Sales, dues, expenses, cash-flow, and profit totals agree with the test records; required CSV and print/PDF exports open correctly. | |
 | Food cost | Check one recipe's units/yield and one resale item's cost. Later cost changes do not rewrite captured costs on old sales; estimated historical costs are identified. | |
@@ -90,7 +91,7 @@ For device mode, copy encrypted `.hotelbackup` files away from the operating dev
 | Training topic | Attendee / role | Date / demonstrated successfully |
 | --- | --- | --- |
 | Sign-in, shift opening, sales, discounts, receipts | | |
-| Credit customers, partial collections, and refunds | | |
+| Customer Loan, saved customers, partial collections, and refunds | | |
 | Products, stock, recipes, purchases, and low stock | | |
 | Reports, expenses, day-end reconciliation | | |
 | Backup, restore drill, and outage recovery | | |

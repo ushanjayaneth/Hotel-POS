@@ -1,6 +1,7 @@
 import ProductPhoto from '../components/ProductPhoto';
+import NumberPad from '../components/NumberPad';
 import {deviceDraftId} from '../lib/workspace-mode';
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
   Check,
@@ -41,6 +42,7 @@ import { Modal, StatusBadge } from "../components/ui";
 import { useBackLayer } from "../lib/navigation";
 import { useDevicePreferences, type ShortcutAction } from "../lib/preferences";
 import { CategoryDialog, ProductDialog } from "./Products";
+import {registerAppUpdateGuard, saveDraftBeforeUpdate} from '../lib/update-safety';
 
 const categoryIcons: Record<string, typeof Grid2X2> = {
   rice: CookingPot,
@@ -92,6 +94,7 @@ export default function POS({
   const [newOrderDialog, setNewOrderDialog] = useState(false);
   const [itemNote, setItemNote] = useState<string | null>(null);
   const [draftNote, setDraftNote] = useState("");
+  const [quantityItem,setQuantityItem]=useState<string|null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const scanRef = useRef({ text: "", start: 0, last: 0 });
   useBackLayer(mobileCart, () => setMobileCart(false), "order-drawer");
@@ -168,10 +171,7 @@ export default function POS({
       active = false;
     };
   }, [branchId, notify]);
-  useEffect(() => {
-    if (loadedBranch !== branchId) return;
-    void browserDb.drafts
-      .put({
+  const currentDraft = useMemo(() => loadedBranch === branchId ? {
         id: deviceDraftId(branchId),
         lines,
         type,
@@ -183,22 +183,29 @@ export default function POS({
         discount,
         commandId: orderCommand,
         updatedAt: new Date().toISOString(),
-      })
+      } : null, [lines,type,tableId,customerId,heldBillId,heldBillUpdatedAt,note,discount,orderCommand,loadedBranch,branchId]);
+  const currentDraftRef = useRef(currentDraft);
+  currentDraftRef.current = currentDraft;
+  useLayoutEffect(() => registerAppUpdateGuard(async signal => {
+    while (!signal.aborted) {
+      const draft = currentDraftRef.current;
+      if (!draft) throw new Error('The current draft is still opening. Wait before reloading the app.');
+      try {await saveDraftBeforeUpdate(draft);}
+      catch {
+        setDraftSaveError('This draft could not be saved on this device. Keep this page open and free storage before leaving.');
+        throw new Error('Reload stopped because the current draft could not be saved. Free device storage and try again.');
+      }
+      if (signal.aborted) return;
+      if (currentDraftRef.current === draft) {setDraftSaveError('');return;}
+      // Edits made while a previous write was pending must also be durable.
+    }
+  }), []);
+  useEffect(() => {
+    if (!currentDraft) return;
+    void saveDraftBeforeUpdate(currentDraft)
       .then(()=>setDraftSaveError(''))
       .catch(()=>setDraftSaveError('This draft could not be saved on this device. Keep this page open and free storage before leaving.'));
-  }, [
-    lines,
-    type,
-    tableId,
-    customerId,
-    heldBillId,
-    heldBillUpdatedAt,
-    note,
-    discount,
-    orderCommand,
-    loadedBranch,
-    branchId,
-  ]);
+  }, [currentDraft]);
   const items = data.menu
     .filter(
       (i) =>
@@ -479,6 +486,7 @@ export default function POS({
   }, [data.menu, activeOrder, busy, notify]);
   return (
     <>
+      {quantityItem&&<NumberPad title="Item quantity" value={String(cart.find(line=>line.menuItemId===quantityItem)?.quantity??1)} min={1} max={1000} onClose={()=>setQuantityItem(null)} onConfirm={value=>{const count=Number(value);setLines(previous=>previous.map(line=>line.menuItemId===quantityItem?{...line,quantity:count,discount:Math.min(line.discount||0,count*(data.menu.find(item=>item.id===quantityItem)?.price||0))}:line));setQuantityItem(null);}}/>}
       {draftSaveError&&<div className="error-message" role="alert">{draftSaveError}</div>}
       <div className="page-heading">
         <div>
@@ -822,7 +830,7 @@ export default function POS({
                 </option>
               ))}
             </select>
-            {!activeOrder&&<button type="button" className="icon-button pos-add-customer" aria-label="Add customer" title="Add customer for credit sales" onClick={()=>setAddCustomerDialog(true)}><Plus size={14}/></button>}
+            {!activeOrder&&<button type="button" className="icon-button pos-add-customer" aria-label="Add customer" title="Add customer for loans" onClick={()=>setAddCustomerDialog(true)}><Plus size={14}/></button>}
           </div>
           <div className="order-items-heading">
             <span>ITEM</span>
@@ -860,7 +868,7 @@ export default function POS({
                         >
                           <Minus size={10} />
                         </button>
-                        <span>{line.quantity}</span>
+                        <button className="quantity-entry" aria-label={`Enter quantity for ${line.item.name}`} disabled={busy} onClick={()=>setQuantityItem(line.menuItemId)}>{line.quantity}</button>
                         <button
                           onClick={() => adjust(line.menuItemId, 1)}
                           aria-label={`Add one more ${line.item.name}`}
@@ -1035,7 +1043,7 @@ export default function POS({
                       : "Charge order"}
                   <ArrowRight size={16} />
                 </button>
-                {!activeOrder&&canTakePayment&&<button type="button" className="button credit-sale-button" disabled={busy||!lines.length||!data.sync.hubOnline} onClick={()=>{if(customerId)void submit(true,'credit');else setCreditCustomerDialog(true);}}><Users size={14}/>Sell on credit<span>{customerId?data.customers.find(customer=>customer.id===customerId)?.name:'Select customer'}</span></button>}
+                {!activeOrder&&canTakePayment&&<button type="button" className="button credit-sale-button" disabled={busy||!lines.length||!data.sync.hubOnline} onClick={()=>setCreditCustomerDialog(true)}><Users size={14}/>Customer Loan<span>{customerId?data.customers.find(customer=>customer.id===customerId)?.name:'New or existing customer'}</span></button>}
                 {!activeOrder && (
                   <button
                     className="button send-kitchen-button"
@@ -1263,26 +1271,89 @@ export default function POS({
         />
       )}
       {discountLine&&<DiscountDialog key={discountLine.menuItemId} title="Item discount" subtitle={`${discountLine.item.name} · Amount applies to all ${discountLine.quantity} units on this line.`} subtotal={discountLine.item.price*discountLine.quantity} discount={discountLine.discount||0} onClose={()=>setItemDiscount(null)} onSave={value=>{setLines(previous=>previous.map(line=>line.menuItemId===discountLine.menuItemId?{...line,discount:value}:line));setItemDiscount(null);}}/>}
-      {(addCustomerDialog||creditCustomerDialog)&&<POSCustomerDialog credit={creditCustomerDialog} onClose={()=>{setAddCustomerDialog(false);setCreditCustomerDialog(false);}} onSelected={id=>{setCustomerId(id);setAddCustomerDialog(false);setCreditCustomerDialog(false);if(creditCustomerDialog)void submit(true,'credit',id);}}/>}
+      {(addCustomerDialog||creditCustomerDialog)&&<POSCustomerDialog credit={creditCustomerDialog} initialCustomerId={customerId} onClose={()=>{setAddCustomerDialog(false);setCreditCustomerDialog(false);}} onSelected={id=>{setCustomerId(id);setAddCustomerDialog(false);setCreditCustomerDialog(false);if(creditCustomerDialog)void submit(true,'credit',id);}}/>}
     </>
   );
 }
 
-function POSCustomerDialog({credit,onClose,onSelected}:{credit:boolean;onClose:()=>void;onSelected:(id:string)=>void}){
-  const {data,mutate,notify}=usePOS();
-  const [creating,setCreating]=useState(!credit||data.customers.length===0);
-  const [selected,setSelected]=useState('');const [busy,setBusy]=useState(false);const [error,setError]=useState('');
-  const [requestId]=useState(commandId);
-  const customer=data.customers.find(item=>item.id===selected);
-  return <Modal title={credit?'Customer credit sale':'Add customer'} subtitle={credit?'Choose a customer account or create one before confirming this credit sale.':'Save customer details for sales and outstanding dues.'} onClose={()=>busy?false:onClose()}>
-    <form onSubmit={async event=>{event.preventDefault();if(busy)return;if(!creating){if(selected)onSelected(selected);return;}setBusy(true);setError('');const fields=new FormData(event.currentTarget);try{const result=await mutate<{customer:{id:string;name:string}}>('/customers',{commandId:requestId,name:String(fields.get('name')||'').trim(),phone:String(fields.get('phone')||'').trim(),email:String(fields.get('email')||'').trim()});notify(`Customer ${result.customer.name} added.`);onSelected(result.customer.id);}catch(cause){setError((cause as Error).message);setBusy(false);}}}>
-      {credit&&data.customers.length>0&&<div className="customer-choice-tabs"><button type="button" className={`button ${!creating?'button-primary':'button-ghost'}`} onClick={()=>setCreating(false)} disabled={busy}>Existing customer</button><button type="button" className={`button ${creating?'button-primary':'button-ghost'}`} onClick={()=>setCreating(true)} disabled={busy}>New customer</button></div>}
-      {creating?<div className="form-grid"><label className="field"><span>Customer name</span><input className="input" name="name" required minLength={2} maxLength={120} autoComplete="name" disabled={busy}/></label><label className="field"><span>Phone number</span><input className="input" name="phone" type="tel" required minLength={5} maxLength={30} autoComplete="tel" disabled={busy}/></label><label className="field full"><span>Email (optional)</span><input className="input" name="email" type="email" maxLength={254} autoComplete="email" disabled={busy}/></label></div>:<><label className="field"><span>Customer account</span><select className="select" required value={selected} onChange={event=>setSelected(event.target.value)}><option value="">Choose customer</option>{data.customers.map(item=><option key={item.id} value={item.id}>{item.name} · {item.phone}</option>)}</select></label>{customer&&<div className="credit-customer-summary"><Users size={19}/><div><strong>{customer.name}</strong><small>{customer.phone}</small><span>Current outstanding: {money(customer.balance)}</span></div></div>}</>}
-      {error&&<p className="error-message" role="alert">{error}</p>}
-      <p className="held-bill-note">{credit?'The next step confirms the credit amount. This does not record cash received; repayments are recorded in Customers & dues.':'Select this customer on future bills to record credit sales and repayments.'}</p>
-      <div className="form-actions"><button type="button" className="button button-ghost" disabled={busy} onClick={onClose}>Cancel</button><button className="button button-primary" disabled={busy||!creating&&!selected}>{busy?'Saving customer…':credit?'Continue to credit sale':'Add customer'}</button></div>
-    </form>
-  </Modal>;
+function POSCustomerDialog({
+  credit,
+  initialCustomerId = '',
+  onClose,
+  onSelected,
+}: {
+  credit: boolean;
+  initialCustomerId?: string;
+  onClose: () => void;
+  onSelected: (id: string) => void;
+}) {
+  const { data, mutate, notify } = usePOS();
+  const [creating, setCreating] = useState(!credit || data.customers.length === 0);
+  const [selected, setSelected] = useState(initialCustomerId);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [requestId] = useState(commandId);
+  const customer = data.customers.find(item => item.id === selected);
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (busy) return;
+    if (!creating) {
+      if (customer) onSelected(customer.id);
+      return;
+    }
+    setBusy(true);
+    setError('');
+    const fields = new FormData(event.currentTarget);
+    try {
+      const result = await mutate<{ customer: { id: string; name: string } }>('/customers', {
+        commandId: requestId,
+        name: String(fields.get('name') || '').trim(),
+        phone: String(fields.get('phone') || '').trim(),
+        email: String(fields.get('email') || '').trim(),
+      });
+      notify(`Customer ${result.customer.name} added.`);
+      onSelected(result.customer.id);
+    } catch (cause) {
+      setError((cause as Error).message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      title={credit ? 'Customer Loan' : 'Add customer'}
+      subtitle={credit ? 'Choose a saved customer or add their name and phone number to sell on account.' : 'Save customer details for sales and outstanding dues.'}
+      onClose={() => busy ? false : onClose()}
+    >
+      <form onSubmit={event => void submit(event)}>
+        {credit && data.customers.length > 0 && (
+          <div className="customer-choice-tabs">
+            <button type="button" className={`button ${!creating ? 'button-primary' : 'button-ghost'}`} onClick={() => {setCreating(false);setError('');}} disabled={busy}>Existing customer</button>
+            <button type="button" className={`button ${creating ? 'button-primary' : 'button-ghost'}`} onClick={() => {setCreating(true);setError('');}} disabled={busy}>New customer</button>
+          </div>
+        )}
+        {creating ? (
+          <div className="form-grid">
+            <label className="field"><span>Customer name</span><input className="input" name="name" required minLength={2} maxLength={120} autoComplete="name" disabled={busy}/></label>
+            <label className="field"><span>Phone number</span><input className="input" name="phone" type="tel" required minLength={5} maxLength={30} autoComplete="tel" disabled={busy}/></label>
+            <label className="field full"><span>Email (optional)</span><input className="input" name="email" type="email" maxLength={254} autoComplete="email" disabled={busy}/></label>
+          </div>
+        ) : (
+          <>
+            <label className="field"><span>Customer account</span><select className="select" required value={selected} disabled={busy} onChange={event => setSelected(event.target.value)}><option value="">Choose customer</option>{data.customers.map(item => <option key={item.id} value={item.id}>{item.name} · {item.phone}</option>)}</select></label>
+            {customer && <div className="credit-customer-summary"><Users size={19}/><div><strong>{customer.name}</strong><small>{customer.phone}</small><span>Current outstanding: {money(customer.balance)}</span></div></div>}
+          </>
+        )}
+        {error && <p className="error-message" role="alert">{error}</p>}
+        <p className="held-bill-note">{credit ? 'Review and confirm the loan amount next. Record later repayments in Customers & dues.' : 'Select this customer on future bills to record loans and repayments.'}</p>
+        <div className="form-actions">
+          <button type="button" className="button button-ghost" disabled={busy} onClick={onClose}>Cancel</button>
+          <button className="button button-primary" disabled={busy || (!creating && !customer)}>{busy ? 'Saving customer…' : credit ? 'Continue to loan' : 'Add customer'}</button>
+        </div>
+      </form>
+    </Modal>
+  );
 }
 
 function DiscountDialog({
@@ -1364,9 +1435,13 @@ export function PaymentDialog({
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [choosingCustomer, setChoosingCustomer] = useState(false);
+  const [selectedCustomerId, setSelectedCustomerId] = useState('');
+  const [numberPad,setNumberPad]=useState<'amount'|'received'|null>(null);
   const [id] = useState(commandId);
   if (!order) return null;
-  const customer = data.customers.find((item) => item.id === order.customerId);
+  const customer = data.customers.find((item) => item.id === (selectedCustomerId || order.customerId));
+  const canChooseCustomer = order.payments.length === 0 && order.paid === 0 && order.refunded === 0;
   const minor = Math.round(Number(amount) * 100);
   const receivedMinor = Math.round(Number(received) * 100);
   async function submit(e: React.FormEvent) {
@@ -1374,7 +1449,7 @@ export function PaymentDialog({
     if (!order || busy) return;
     if (method === "credit" && !customer) {
       setError(
-        "Select a customer before confirming an order for customer credit.",
+        "Choose or add a customer before confirming this customer loan.",
       );
       return;
     }
@@ -1385,13 +1460,14 @@ export function PaymentDialog({
         commandId: id,
         expectedVersion: order.version,
         method,
+        ...(method === 'credit' && customer ? {customerId: customer.id} : {}),
         amount: minor,
         received: method === "cash" ? receivedMinor : minor,
         reference: method === "credit" ? "" : reference,
       });
       notify(
         method === "credit"
-          ? `Credit recorded for ${customer?.name}. Collect it from Customers & dues.`
+          ? `Loan recorded for ${customer?.name}. Collect it from Customers & dues.`
           : minor < due
             ? "Partial payment recorded."
             : "Payment recorded. Thank you!",
@@ -1402,6 +1478,15 @@ export function PaymentDialog({
     } finally {
       setBusy(false);
     }
+  }
+  if(numberPad)return <NumberPad title={numberPad==='amount'?'Payment amount (LKR)':'Cash received (LKR)'} value={numberPad==='amount'?amount:received} decimal min={numberPad==='amount'?.01:Number(amount)} max={numberPad==='amount'?due/100:10000000} onClose={()=>setNumberPad(null)} onConfirm={value=>{if(numberPad==='amount'){setAmount(value);setReceived(value);}else setReceived(value);setNumberPad(null);}}/>;
+  if (choosingCustomer) {
+    return <POSCustomerDialog credit initialCustomerId={customer?.id} onClose={() => setChoosingCustomer(false)} onSelected={customerId => {
+      setSelectedCustomerId(customerId);
+      setConfirmed(false);
+      setError('');
+      setChoosingCustomer(false);
+    }}/>;
   }
   return (
     <Modal
@@ -1421,7 +1506,7 @@ export function PaymentDialog({
               { id: "cash", name: "Cash", icon: Wallet },
               { id: "card", name: "Card", icon: Wallet },
               { id: "qr", name: "QR / Bank", icon: Grid2X2 },
-              { id: "credit", name: "Customer credit", icon: Users },
+              { id: "credit", name: "Customer Loan", icon: Users },
             ] as const
           ).map((m) => (
             <button
@@ -1431,11 +1516,13 @@ export function PaymentDialog({
               onClick={() => {
                 setMethod(m.id);
                 setConfirmed(false);
+                setError('');
+                if (m.id === 'credit' && !customer && canChooseCustomer) setChoosingCustomer(true);
               }}
-              disabled={busy || (m.id === "credit" && !customer)}
+              disabled={busy || (m.id === "credit" && !customer && !canChooseCustomer)}
               title={
-                m.id === "credit" && !customer
-                  ? "Select a customer before sending this order to use customer credit."
+                m.id === "credit" && !customer && !canChooseCustomer
+                  ? "A customer cannot be assigned after payments have been recorded."
                   : undefined
               }
             >
@@ -1444,10 +1531,9 @@ export function PaymentDialog({
             </button>
           ))}
         </div>
-        {!customer && (
+        {!customer && method !== 'credit' && canChooseCustomer && (
           <p className="held-bill-note">
-            To offer customer credit, select a customer before sending the
-            order.
+            Choose Customer Loan to add a customer or select a saved account.
           </p>
         )}
         {error && (
@@ -1458,7 +1544,9 @@ export function PaymentDialog({
         <div className="form-grid">
           <label className="field">
             <span>Payment amount (LKR)</span>
+            <div className="number-input-row">
             <input
+              aria-label="Payment amount (LKR)"
               className="input"
               type="number"
               min="0.01"
@@ -1471,11 +1559,14 @@ export function PaymentDialog({
                 setReceived(e.target.value);
               }}
             />
+            <button type="button" className="icon-button" aria-label="Enter payment amount with keypad" disabled={busy} onClick={event=>{event.preventDefault();setNumberPad('amount');}}><Grid2X2 size={19}/></button></div>
           </label>
           {method === "cash" ? (
             <label className="field">
               <span>Cash received (LKR)</span>
+              <div className="number-input-row">
               <input
+                aria-label="Cash received (LKR)"
                 className="input"
                 type="number"
                 required
@@ -1484,14 +1575,17 @@ export function PaymentDialog({
                 value={received}
                 onChange={(e) => setReceived(e.target.value)}
               />
+              <button type="button" className="icon-button" aria-label="Enter cash received with keypad" disabled={busy} onClick={event=>{event.preventDefault();setNumberPad('received');}}><Grid2X2 size={19}/></button></div>
             </label>
           ) : method === "credit" ? (
             <div className="credit-customer-summary">
               <Users size={19} />
               <div>
                 <span>Charge to customer account</span>
-                <strong>{customer?.name}</strong>
+                <strong>{customer?.name || 'No customer selected'}</strong>
                 <small>{customer?.phone}</small>
+                {customer && <span>Current outstanding: {money(customer.balance)}</span>}
+                {canChooseCustomer && <button type="button" className="loan-customer-change" disabled={busy} onClick={() => {setConfirmed(false);setChoosingCustomer(true);}}>{customer ? 'Change customer' : 'Choose customer'}</button>}
               </div>
             </div>
           ) : (
@@ -1537,11 +1631,12 @@ export function PaymentDialog({
               type="checkbox"
               checked={confirmed}
               required
+              disabled={busy || (method === 'credit' && !customer)}
               onChange={(e) => setConfirmed(e.target.checked)}
             />
             <span>
               {method === "credit"
-                ? `I confirm ${customer?.name} is authorised for this credit sale. The amount will be added to their outstanding dues.`
+                ? `I confirm ${customer?.name || 'the selected customer'} is authorised for this customer loan. The amount will be added to their outstanding dues.`
                 : "I have verified the approved payment on the terminal or bank account. This action records the payment; it does not charge a card."}
             </span>
           </label>
@@ -1570,7 +1665,7 @@ export function PaymentDialog({
             {busy
               ? "Recording..."
               : method === "credit"
-                ? "Confirm credit sale"
+                ? "Confirm customer loan"
                 : "Confirm payment"}
           </button>
         </div>
