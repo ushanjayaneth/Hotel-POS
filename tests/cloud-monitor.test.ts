@@ -1,11 +1,12 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {createHmac} from 'node:crypto';
 import 'fake-indexeddb/auto';
 import {LocalDatabase} from '../src/lib/local/db';
 import {initializeLocalWorkspace} from '../src/lib/local/seed';
 import {createLocalApi} from '../src/lib/local/core';
 import {buildBackupPayload} from '../src/lib/local/backup';
-import {connectDeviceToCloud,getCloudSyncState,syncDeviceCloud,cloudChunks,monitoringChanges} from '../src/lib/cloud-sync';
+import {connectDeviceToCloud,getCloudSyncState,syncDeviceCloud,cloudChunks,monitoringChanges,autoConnectDeviceToCloud,rehydrateFromCloud} from '../src/lib/cloud-sync';
 import {createMonitorHandler} from '../server/monitor/handler';
 import {MemoryMonitorStore,recordKey} from '../server/monitor/store';
 import type {CloudChange,CloudSnapshot} from '../shared/cloud-monitor';
@@ -40,6 +41,75 @@ test('cloud endpoints require configuration, private owner session and same-orig
     assert.equal((await f.call('sources')).status,200);
     for(let i=0;i<12;i++)await f.call('login',{email:env.CLOUD_OWNER_EMAIL,password:'incorrect'});
     assert.equal((await f.call('login',{email:env.CLOUD_OWNER_EMAIL,password:env.CLOUD_OWNER_PASSWORD})).status,429);
+  }finally{await f.close();}
+});
+
+test('anonymous enrollment cannot create a source or acquire an existing device write grant',async()=>{
+  const f=await fixture();try{
+    const anonymous=async(action:string,body:unknown)=>f.handler(new Request(`https://pos.example.test/api/cloud?action=${action}`,{
+      method:'POST',headers:{Origin:'https://pos.example.test','Content-Type':'application/json'},body:JSON.stringify(body)
+    }));
+    const enrollment={sourceId:'anonymous-source-attempt',workspaceId:'workspace-test',businessName:'Another shop',deviceName:'Another phone'};
+    assert.equal((await anonymous('enroll',enrollment)).status,401);
+    assert.equal(await f.store.get(enrollment.sourceId),null);
+
+    await connectDeviceToCloud({email:env.CLOUD_OWNER_EMAIL,password:env.CLOUD_OWNER_PASSWORD,deviceName:'Protected shop'},{db:f.db,fetch:f.request});
+    const state=(await syncDeviceCloud({db:f.db,fetch:f.request}))!;
+    const before=(await f.store.get(state.sourceId))!;
+    const overwrite=await anonymous('push',{sourceId:state.sourceId,epoch:before.source.epoch,sequence:before.source.sequence+1,eventId:'anonymous-overwrite',ready:true,changes:[]});
+    assert.equal(overwrite.status,401);
+    assert.deepEqual(await f.store.get(state.sourceId),before);
+  }finally{await f.close();}
+});
+
+test('concurrent owner pairing issues a grant only for the enrollment committed to cloud storage',async()=>{
+  const f=await fixture();try{
+    await f.call('login',{email:env.CLOUD_OWNER_EMAIL,password:env.CLOUD_OWNER_PASSWORD});
+    const input={sourceId:'concurrent-pairing-source',workspaceId:'workspace-test',businessName:'Concurrent shop',deviceName:'Counter A'};
+    const responses=await Promise.all([f.call('enroll',input),f.call('enroll',{...input,deviceName:'Counter B'})]);
+    assert.deepEqual(responses.map(response=>response.status).sort(),[200,409]);
+    const winner=await responses.find(response=>response.status===200)!.json() as {sourceId:string;epoch:string;token:string};
+    const loser=await responses.find(response=>response.status===409)!.json() as Record<string,unknown>;
+    assert.equal(loser.token,undefined);
+    assert.equal((await f.store.get(input.sourceId))!.source.epoch,winner.epoch);
+    const heartbeat=await f.call('heartbeat',{sourceId:winner.sourceId,epoch:winner.epoch},{Authorization:`Bearer ${winner.token}`});
+    assert.equal(heartbeat.status,200);
+    assert.equal((await f.call('enroll',input)).status,409);
+  }finally{await f.close();}
+});
+
+test('background sync does not enroll an unpaired device or send business data',async()=>{
+  const f=await fixture();try{
+    let requests=0;
+    const request:typeof fetch=async()=>{requests++;throw new Error('Unpaired devices must not contact the cloud.');};
+    assert.equal(await syncDeviceCloud({db:f.db,fetch:request}),null);
+    assert.equal(requests,0);
+    assert.equal(await getCloudSyncState(f.db),null);
+    assert.deepEqual(await f.store.list(),[]);
+  }finally{await f.close();}
+});
+
+test('legacy anonymous-era grants are rejected without deleting the local journal or cloud records',async()=>{
+  const f=await fixture();try{
+    await connectDeviceToCloud({email:env.CLOUD_OWNER_EMAIL,password:env.CLOUD_OWNER_PASSWORD,deviceName:'Legacy counter'},{db:f.db,fetch:f.request});
+    const state=(await syncDeviceCloud({db:f.db,fetch:f.request}))!;
+    const before=(await f.store.get(state.sourceId))!;
+    const row=(await f.db.metadata.get('cloudMonitor:connection'))!;
+    const connection=row.value as {token:string};
+    const payload=JSON.parse(Buffer.from(connection.token.split('.')[0],'base64url').toString()) as Record<string,unknown>;
+    assert.equal(payload.purpose,'owner-paired-writer-v2');
+    payload.purpose='writer';
+    const text=Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const token=`${text}.${createHmac('sha256',env.CLOUD_SESSION_SECRET).update(text).digest('base64url')}`;
+    await f.db.metadata.put({...row,value:{...row.value as object,token}});
+    await createLocalApi(f.db)('/orders',{commandId:'legacy-pending-local-sale',branchId:'b1',type:'takeaway',lines:[{menuItemId:'m1',quantity:1}]});
+    const journal=await f.db.journal.toArray(),records=await f.db.records.toArray();
+    const rejected=(await syncDeviceCloud({db:f.db,fetch:f.request}))!;
+    assert.equal(rejected.needsReconnect,true);assert.ok(rejected.pending>0);assert.match(rejected.lastError,/older cloud connection.*Reconnect/);
+    assert.deepEqual(await f.db.journal.toArray(),journal);assert.deepEqual(await f.db.records.toArray(),records);
+    assert.deepEqual(await f.store.get(state.sourceId),before);
+    const heartbeat=await f.call('heartbeat',{sourceId:state.sourceId,epoch:before.source.epoch},{Authorization:`Bearer ${token}`});
+    assert.equal(heartbeat.status,401);assert.equal((await heartbeat.json()).code,'DEVICE_RECONNECT_REQUIRED');
   }finally{await f.close();}
 });
 
@@ -94,3 +164,39 @@ test('cloud packet sizes are bounded and credential tables/media never enter mon
   const records:Array<CloudChange>=Array.from({length:251},(_,index)=>({kind:'customer',id:`c${index}`,branchId:null,value:{id:`c${index}`,name:'a'.repeat(1000)}}));
   const chunks=cloudChunks(records,50000);assert.equal(chunks.flat().length,251);assert.ok(chunks.every(chunk=>Buffer.byteLength(JSON.stringify(chunk))<50000));
 });
+
+test('multi-device sync shares sales across devices and rehydrates wiped storage from cloud',async()=>{
+  const f=await fixture();
+  const db2=new LocalDatabase(`cloud-test-device2-${crypto.randomUUID()}`);
+  const dbWiped=new LocalDatabase(`cloud-test-wiped-${crypto.randomUUID()}`);
+  try{
+    const state1=await autoConnectDeviceToCloud({db:f.db,fetch:f.request});
+    assert.ok(state1?.linked);
+    await syncDeviceCloud({db:f.db,fetch:f.request});
+
+    const api1=createLocalApi(f.db);
+    const sale=await api1<{order:Order}>('/orders',{commandId:'dev1-sale-01',branchId:'b1',type:'takeaway',lines:[{menuItemId:'m1',quantity:2}]});
+    assert.equal(sale.order.lines.length,1);
+    await syncDeviceCloud({db:f.db,fetch:f.request});
+
+    await initializeLocalWorkspace({businessName:'Cloud Test Hotel',ownerName:'Cashier 2',pin:'123456',demo:false},db2);
+    const state2=await autoConnectDeviceToCloud({db:db2,fetch:f.request});
+    assert.equal(state2?.sourceId,state1?.sourceId);
+
+    await syncDeviceCloud({db:db2,fetch:f.request});
+    const dev2Orders=await db2.records.where('kind').equals('order').toArray();
+    assert.ok(dev2Orders.some(o=>(o.value as Order).id===sale.order.id));
+
+    const restored=await rehydrateFromCloud(dbWiped,f.request);
+    assert.equal(restored,true);
+    const wipedOrders=await dbWiped.records.where('kind').equals('order').toArray();
+    assert.ok(wipedOrders.some(o=>(o.value as Order).id===sale.order.id));
+    const wipedWorkspace=await dbWiped.metadata.get('workspace');
+    assert.ok(wipedWorkspace?.value);
+  }finally{
+    await f.close();
+    await db2.delete();
+    await dbWiped.delete();
+  }
+});
+

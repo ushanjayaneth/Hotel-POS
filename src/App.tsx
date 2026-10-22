@@ -58,7 +58,8 @@ import {DeviceSetup,InitialDeviceRestore} from './components/DeviceSetup';
 import {syncLocalProductPhotos} from './lib/media';
 import {flushBeforeAppUpdate} from './lib/update-safety';
 import {sharedCloudSource} from './lib/cloud-shared';
-import {autoConnectDeviceToCloud,cloudRequest,syncDeviceCloud} from './lib/cloud-sync';
+import {autoConnectDeviceToCloud,cloudRequest,rehydrateFromCloud,syncDeviceCloud} from './lib/cloud-sync';
+import {requestDevicePersistence} from './lib/local/storage';
 import CloudMonitor from './components/CloudMonitor';
 import ConnectivityStatus from './components/ConnectivityStatus';
 
@@ -283,9 +284,9 @@ function WorkspaceApp() {
     let timer:ReturnType<typeof setTimeout>|undefined;
     const upload=()=>{if(navigator.onLine!==false){void autoConnectDeviceToCloud().catch(()=>{});void syncDeviceCloud().catch(()=>{});}};
     const change=()=>{clearTimeout(timer);timer=setTimeout(upload,1000);};
-    upload();const interval=setInterval(upload,30000);
-    window.addEventListener('online',upload);window.addEventListener('focus',upload);window.addEventListener('local-workspace-change',change);
-    return()=>{clearTimeout(timer);clearInterval(interval);window.removeEventListener('online',upload);window.removeEventListener('focus',upload);window.removeEventListener('local-workspace-change',change);};
+    upload();const interval=setInterval(upload,12000);
+    window.addEventListener('online',upload);window.addEventListener('focus',upload);document.addEventListener('visibilitychange',upload);window.addEventListener('local-workspace-change',change);
+    return()=>{clearTimeout(timer);clearInterval(interval);window.removeEventListener('online',upload);window.removeEventListener('focus',upload);document.removeEventListener('visibilitychange',upload);window.removeEventListener('local-workspace-change',change);};
   },[deviceMode,user]);
   const [mobileNav, setMobileNav] = useState(false);
   const [notifications, setNotifications] = useState(false);
@@ -426,7 +427,15 @@ function WorkspaceApp() {
     setStarting(true);setUser(null);setData(null);setLoadError('');
     setBranchId(uiStorage.getItem(sharedCloudSource()?`dh-cloud-branch:${sharedCloudSource()}`:deviceMode?'dh-device-branch':'dh-branch')||'b1');
     void (async()=>{
-      const info=await getLocalWorkspaceInfo().catch(()=>null);
+      void requestDevicePersistence(true).catch(()=>{});
+      let info=await getLocalWorkspaceInfo().catch(()=>null);
+      if(!info&&navigator.onLine!==false){
+        const restored=await rehydrateFromCloud().catch(()=>false);
+        if(restored){
+          info=await getLocalWorkspaceInfo().catch(()=>null);
+          setWorkspaceMode('device');
+        }
+      }
       if(!active)return null;
       setDeviceInfo(info);
       if(info&&!readSavedWorkspaceMode()&&!deviceMode){setWorkspaceMode('device');return null;}

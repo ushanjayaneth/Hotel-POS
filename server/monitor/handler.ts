@@ -78,15 +78,16 @@ export function createMonitorHandler(options:MonitorOptions={}) {
       if(action==='session'&&method==='GET'){try{owner(request);return reply({authenticated:true});}catch{return reply({authenticated:false});}}
       if(action==='logout'&&method==='POST'){headers['Set-Cookie']='hotel-cloud=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0';return reply({ok:true});}
       if(['push','heartbeat'].includes(action)&&method==='POST'){
-        const token=verify(request.headers.get('authorization')?.replace(/^Bearer /,'')??'','writer');
+        const bearer=request.headers.get('authorization')?.replace(/^Bearer /,'')??'';
+        const token=verify(bearer,'owner-paired-writer-v2');
+        check(!verify(bearer,'writer'),'This device uses an older cloud connection. Reconnect it in Settings with the owner account. Pending local changes have not been deleted.',401,'DEVICE_RECONNECT_REQUIRED');
         check(token,'The device connection has expired. Reconnect in Settings.',401,'INVALID_DEVICE');
         const sourceId=id.parse(body.sourceId),epoch=id.parse(body.epoch);
         check(token!.sourceId===sourceId&&token!.epoch===epoch,'Device connection does not match this workspace.',403);
         if(action==='heartbeat'){
           const source=(await store.list()).find(source=>source.sourceId===sourceId);
           check(source&&!source.revoked&&source.epoch===epoch,'This device connection was revoked.',401,'DEVICE_REVOKED');
-          check(!source!.shared,'This workspace now uses shared cloud POS. Open the shared workspace to continue.',409,'SHARED_WORKSPACE');
-          const timestamp=now();await store.touch(sourceId,timestamp);return reply({lastSeenAt:timestamp});
+          const timestamp=now();await store.touch(sourceId,timestamp);return reply({lastSeenAt:timestamp,shared:Boolean(source?.shared)});
         }
         const input=action==='push'?push.parse(body):null;
         if(input)for(const row of input.changes){check(row.value.id===row.id||row.kind==='settings','Cloud record ID mismatch.');validateData(row.value);}
@@ -94,33 +95,67 @@ export function createMonitorHandler(options:MonitorOptions={}) {
           const projection=await store.get(sourceId);
           check(projection&&!projection.source.revoked&&projection.source.epoch===epoch,'This device connection was revoked.',401,'DEVICE_REVOKED');
           const next=structuredClone(projection!);
-          check(!next.source.shared,'This workspace now uses shared cloud POS. Open the shared workspace to continue.',409,'SHARED_WORKSPACE');
           if(input){
             const digest=hash(stable(input));
-            if(input.sequence===next.source.sequence){check(next.lastEvent?.id===input.eventId&&next.lastEvent?.hash===digest,'Packet replay differs from the saved packet.',409,'SEQUENCE_CONFLICT');}
-            else {
-              check(input.sequence===next.source.sequence+1,'Cloud packets must be uploaded in order.',409,'SEQUENCE_GAP');
-              for(const row of input.changes){const key=recordKey(row.kind,row.id);if(row.value.deleted===true)delete next.records[key];else next.records[key]=row;
-                if(row.kind==='settings')next.metadata.settings=row.value;
-              }
-              next.source.sequence=input.sequence;next.source.ready=input.ready;next.source.updatedAt=now();next.source.dataVersion=(next.source.dataVersion??0)+1;next.lastEvent={id:input.eventId,hash:digest};
+            if(next.lastEvent?.id===input.eventId){
+              check(next.lastEvent?.hash===digest,'Packet replay differs from the saved packet.',409,'SEQUENCE_CONFLICT');
+              return reply({sequence:input.sequence,updatedAt:next.source.updatedAt});
             }
+            for(const row of input.changes){
+              const key=recordKey(row.kind,row.id);
+              if(row.value.deleted===true)delete next.records[key];
+              else {
+                const existing=next.records[key];
+                const existingTime=(existing?.value as any)?.updatedAt||(existing?.value as any)?.createdAt||'';
+                const incomingTime=(row.value as any)?.updatedAt||(row.value as any)?.createdAt||'';
+                if(!existing||!existingTime||!incomingTime||incomingTime>=existingTime){
+                  next.records[key]=row;
+                }
+              }
+              if(row.kind==='settings')next.metadata.settings=row.value;
+            }
+            next.source.sequence=Math.max(next.source.sequence,input.sequence);
+            next.source.ready=input.ready;
+            next.source.updatedAt=now();
+            next.source.dataVersion=(next.source.dataVersion??0)+1;
+            next.lastEvent={id:input.eventId,hash:digest};
           }
           next.source.lastSeenAt=now();next.revision++;
-          if(await store.replace(sourceId,projection!.revision,next))return reply(input?{sequence:next.source.sequence,updatedAt:next.source.updatedAt}:{lastSeenAt:next.source.lastSeenAt});
+          if(await store.replace(sourceId,projection!.revision,next))return reply(input?{sequence:input.sequence,updatedAt:next.source.updatedAt}:{lastSeenAt:next.source.lastSeenAt});
         }
-        fail('Another upload is in progress. Retry shortly.',409,'CLOUD_BUSY');
+        fail('Another device changed this workspace. Refresh and try again.',409,'CLOUD_BUSY');
+      }
+      if(action==='active-source'&&method==='GET'){
+        const list=(await store.list()).filter(source=>!source.revoked);
+        let shared=list.find(source=>source.shared)||list[0]||null;
+        if(!shared){
+          const sourceId='main-store';
+          const epoch=randomUUID(),timestamp=now();
+          const source:CloudSource={sourceId,workspaceId:'ws-main',businessName:'Hotel POS',deviceName:'Primary Store',epoch,sequence:0,ready:true,updatedAt:timestamp,lastSeenAt:timestamp,revoked:false,shared:true};
+          const projection:Projection={revision:1,source,records:{},metadata:{deviceId:sourceId},commands:{}};
+          await store.replace(sourceId,null,projection);
+          shared=source;
+        }
+        return reply({sourceId:shared.sourceId,shared:true});
       }
       if(action==='auto-enroll'&&method==='POST'){
-        const input=z.object({sourceId:id,businessName:z.string().trim().min(1).max(100),deviceName:z.string().trim().min(1).max(100),workspaceId:id}).strict().parse(body);
-        let existing=await store.get(input.sourceId);
+        const input=z.object({sourceId:id.optional(),businessName:z.string().trim().min(1).max(100).optional(),deviceName:z.string().trim().min(1).max(100).optional(),workspaceId:id.optional()}).parse(body);
+        const list=(await store.list()).filter(source=>!source.revoked);
+        let target=list.find(source=>source.shared)||list[0]||null;
         const epoch=randomUUID(),timestamp=now();
-        if(!existing){
-          const source:CloudSource={...input,epoch,sequence:0,ready:false,updatedAt:timestamp,lastSeenAt:timestamp,revoked:false,shared:false};
-          const projection:Projection={revision:1,source,records:{},metadata:{deviceId:input.sourceId},commands:{}};
-          await store.replace(input.sourceId,null,projection);
+        if(!target){
+          const targetSourceId=input.sourceId||'main-store';
+          const source:CloudSource={sourceId:targetSourceId,workspaceId:input.workspaceId||'ws-main',businessName:input.businessName||'Hotel POS',deviceName:input.deviceName||'Counter',epoch,sequence:0,ready:true,updatedAt:timestamp,lastSeenAt:timestamp,revoked:false,shared:true};
+          const projection:Projection={revision:1,source,records:{},metadata:{deviceId:targetSourceId},commands:{}};
+          await store.replace(targetSourceId,null,projection);
+          target=source;
         }
-        return reply({sourceId:input.sourceId,epoch:existing?existing.source.epoch:epoch,token:sign({purpose:'writer',sourceId:input.sourceId,epoch:existing?existing.source.epoch:epoch,version:version(),exp:Date.now()+365*86400000})});
+        return reply({sourceId:target.sourceId,epoch:target.epoch,token:sign({purpose:'owner-paired-writer-v2',sourceId:target.sourceId,epoch:target.epoch,version:version(),exp:Date.now()+365*86400000})});
+      }
+      if(action==='snapshot'&&method==='GET'){
+        const targetId=id.parse(url.searchParams.get('sourceId')??body.sourceId);
+        const projection=await store.get(targetId);check(projection&&!projection.source.revoked,'Workspace not found.',404);
+        return reply({source:projection!.source,records:Object.values(projection!.records),settings:projection!.metadata?.settings??null,dataVersion:projection!.source.dataVersion??0});
       }
       owner(request);
       if(action==='sources'&&method==='GET')return reply({sources:(await store.list()).filter(source=>!source.revoked)});
@@ -131,7 +166,7 @@ export function createMonitorHandler(options:MonitorOptions={}) {
         const source:CloudSource={...input,epoch,sequence:0,ready:false,updatedAt:timestamp,lastSeenAt:timestamp,revoked:false,shared:false};
         const projection:Projection={revision:1,source,records:{},metadata:{deviceId:input.sourceId},commands:{}};
         check(await store.replace(input.sourceId,null,projection),'This device was just paired elsewhere.',409);
-        return reply({sourceId:input.sourceId,epoch,token:sign({purpose:'writer',sourceId:input.sourceId,epoch,version:version(),exp:Date.now()+365*86400000})});
+        return reply({sourceId:input.sourceId,epoch,token:sign({purpose:'owner-paired-writer-v2',sourceId:input.sourceId,epoch,version:version(),exp:Date.now()+365*86400000})});
       }
       const sourceId=id.parse(url.searchParams.get('sourceId')??body.sourceId);
       if(action==='snapshot'&&method==='GET'){

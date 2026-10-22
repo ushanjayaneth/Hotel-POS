@@ -1,0 +1,288 @@
+/* A fixed-scale POS viewport; text remains adjustable in Settings. */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  touch-action: pan-x pan-y;
+  color-scheme: dark;
+}
+
+html, body, #root {
+  width: 100%;
+  min-width: 0;
+  min-height: 100dvh;
+}
+
+.main, .workspace, .page-heading > div, .field, .form-grid > *,
+.cloud-shell, .cloud-header > *, .cloud-stat, .cloud-toolbar .field {
+  min-width: 0;
+}
+
+.modal, .order-panel, .sidebar-scroll, .table-wrap, .cloud-table {
+  overscroll-behavior: contain;
+}
+
+.modal-header > div, .error-message, .cloud-note, .cloud-header p {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* iOS auto-zooms focused controls smaller than 16 px. Preserve the minimum
+   even when the user selects a smaller application text size. */
+@media (pointer: coarse), (max-width: 1024px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  select, textarea {
+    font-size: max(16px, calc(12px * var(--font-scale, 1))) !important;
+  }
+
+  button, a, input, select, textarea {
+    touch-action: pan-x pan-y;
+  }
+}
+
+@media (max-width: 760px) {
+  .topbar {
+    display: grid;
+    grid-template-columns: 40px 40px minmax(0, 1fr);
+    gap: 6px;
+    padding-inline: max(12px, env(safe-area-inset-left)) max(12px, env(safe-area-inset-right));
+  }
+
+  .topbar > .icon-button, .topbar-actions > .icon-button {
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+  }
+
+  .topbar-actions {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: minmax(44px, 1fr) minmax(0, 1.4fr) 40px;
+    gap: 6px;
+  }
+
+  .topbar .shortcut-help-button {
+    display: none;
+  }
+
+  .topbar .branch-picker {
+    min-width: 0;
+    max-width: 100%;
+    height: 40px;
+    padding: 0 5px;
+    gap: 4px;
+  }
+
+  .topbar .branch-picker select {
+    min-width: 0;
+    max-width: 100%;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    text-overflow: ellipsis;
+  }
+
+  .topbar .branch-picker svg {
+    display: none;
+  }
+
+  .topbar .cloud-dots {
+    min-width: 0;
+    font-size: 10px;
+    gap: 5px;
+  }
+
+  .cloud-dots > span {
+    min-width: 0;
+    gap: 4px;
+  }
+
+  .cloud-dots > span > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .workspace {
+    padding-inline: max(14px, env(safe-area-inset-left)) max(14px, env(safe-area-inset-right));
+  }
+
+  .heading-actions, .form-actions {
+    flex-wrap: wrap;
+  }
+
+  .button {
+    max-width: 100%;
+    white-space: normal;
+    text-align: center;
+  }
+
+  .input, .select, textarea {
+    min-width: 0;
+    max-width: 100%;
+    min-height: 44px;
+  }
+
+  .modal-backdrop {
+    padding: max(10px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+  }
+
+  .modal {
+    max-height: calc(100dvh - 20px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    padding: 18px;
+    scroll-padding-block: 18px;
+  }
+
+  .modal .form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .modal .form-actions > .button {
+    flex: 1 1 auto;
+  }
+
+  .search-input {
+    min-width: 0;
+    min-height: 44px;
+  }
+
+  .search-input kbd {
+    display: none;
+  }
+
+  .sort-select {
+    min-width: 0;
+    min-height: 44px;
+    max-width: 43%;
+  }
+
+  .sort-select select {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .category-tabs, .kitchen-board {
+    margin-right: 0;
+  }
+
+  .category-tab {
+    min-height: 44px;
+  }
+
+  .product-info h3 {
+    line-height: 1.5;
+  }
+
+  .product-bottom {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .product-add {
+    width: 40px;
+    height: 40px;
+    flex: none;
+    margin-left: auto;
+  }
+
+  .order-panel.cart-open {
+    height: calc(100dvh - 64px);
+    overflow-y: auto;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .order-panel > * {
+    flex-shrink: 0;
+  }
+
+  .order-panel .cart-lines {
+    flex: 1 0 auto;
+    overflow: visible;
+  }
+
+  .order-types button, .quantity-control button {
+    min-height: 40px;
+  }
+
+  .quantity-control button {
+    min-width: 36px;
+  }
+
+  .order-customer-row {
+    flex-wrap: wrap;
+  }
+
+  .order-customer-row .customer-select {
+    flex: 1 1 130px;
+    max-width: 100%;
+    min-height: 40px;
+  }
+
+  .order-table-select {
+    flex: 1 1 100%;
+  }
+
+  .order-table-select select {
+    max-width: 100%;
+    min-height: 40px;
+  }
+
+  .mobile-cart-button {
+    bottom: max(12px, env(safe-area-inset-bottom));
+    left: max(14px, env(safe-area-inset-left));
+    right: max(14px, env(safe-area-inset-right));
+    width: auto;
+  }
+
+  .cloud-header {
+    flex-wrap: wrap;
+  }
+
+  .cloud-header > div:first-child {
+    flex: 1 1 100%;
+  }
+
+  .cloud-header .cloud-actions {
+    width: 100%;
+  }
+
+  .cloud-toolbar .field {
+    flex: 1 1 150px;
+    max-width: 100%;
+  }
+
+  .cloud-stat strong {
+    font-size: clamp(16px, 4.4vw, 23px);
+    overflow-wrap: anywhere;
+  }
+
+  .cloud-promote {
+    padding: 16px;
+  }
+}
+
+@media (max-width: 380px) {
+  .pos-page .page-heading, .page-heading {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .pos-heading-meta {
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    align-items: center;
+  }
+
+  .cloud-stats {
+    gap: 8px;
+  }
+
+  .cloud-stat {
+    padding: 12px;
+  }
+
+  .cloud-login {
+    margin-inline: 10px;
+    padding: 18px;
+  }
+}
