@@ -101,10 +101,37 @@ export class FirebaseMonitorStore implements MonitorStore {
   }
 }
 
+export function parseServiceAccount(raw: string): any {
+  let text = String(raw).trim();
+  if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
+    try { text = JSON.parse(text); } catch {}
+  }
+  if (!text.startsWith('{')) {
+    try {
+      const decoded = Buffer.from(text, 'base64').toString('utf8');
+      if (decoded.trim().startsWith('{')) text = decoded.trim();
+    } catch {}
+  }
+  let parsed: any;
+  try {
+    parsed = JSON.parse(text);
+  } catch (err) {
+    try {
+      parsed = Function(`return (${text})`)();
+    } catch {
+      throw err;
+    }
+  }
+  if (parsed && typeof parsed.private_key === 'string') {
+    parsed.private_key = parsed.private_key.replace(/\\n/g, '\n');
+  }
+  return parsed;
+}
+
 let cached: { key: string; store: MonitorStore } | undefined;
 export function firebaseMonitorStore(env: NodeJS.ProcessEnv = process.env): MonitorStore {
   const raw = env.FIREBASE_SERVICE_ACCOUNT_JSON!;
-  const service = JSON.parse(raw);
+  const service = parseServiceAccount(raw);
   const key = `${env.CLOUD_TENANT_ID ?? 'hotel'}:${service.project_id}:${env.FIREBASE_DATABASE_URL}`;
   if (cached?.key === key) return cached.store;
   const name = `hotel-monitor-${createHash('sha256').update(key).digest('hex').slice(0, 32)}`;
