@@ -70,7 +70,12 @@ export async function disconnectDeviceCloud(options:Options={}){
 export async function autoConnectDeviceToCloud(options:Options={}):Promise<CloudSyncState|null>{
   const db=options.db??localDb,request=options.fetch??fetch;
   if(await db.metadata.get(key))return getCloudSyncState(db);
-  const info=await getLocalWorkspaceInfo(db);if(!info)return null;
+  let info=await getLocalWorkspaceInfo(db);
+  if(!info){
+    const restored=await rehydrateFromCloud(db,request).catch(()=>false);
+    if(restored)info=await getLocalWorkspaceInfo(db);
+  }
+  if(!info)return null;
   try{
     const activeRes=await request('/api/cloud?action=active-source',{signal:AbortSignal.timeout(10000)}).catch(()=>null);
     let targetSourceId='main-store';

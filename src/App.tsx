@@ -280,14 +280,14 @@ function WorkspaceApp() {
   const [loadError, setLoadError] = useState("");
   const [hubOnline, setHubOnline] = useState(true);
   useEffect(()=>{
-    if(!deviceMode||!user)return;
+    if(!deviceMode)return;
     let timer:ReturnType<typeof setTimeout>|undefined;
     const upload=()=>{if(navigator.onLine!==false){void autoConnectDeviceToCloud().catch(()=>{});void syncDeviceCloud().catch(()=>{});}};
     const change=()=>{clearTimeout(timer);timer=setTimeout(upload,1000);};
     upload();const interval=setInterval(upload,12000);
     window.addEventListener('online',upload);window.addEventListener('focus',upload);document.addEventListener('visibilitychange',upload);window.addEventListener('local-workspace-change',change);
     return()=>{clearTimeout(timer);clearInterval(interval);window.removeEventListener('online',upload);window.removeEventListener('focus',upload);document.removeEventListener('visibilitychange',upload);window.removeEventListener('local-workspace-change',change);};
-  },[deviceMode,user]);
+  },[deviceMode]);
   const [mobileNav, setMobileNav] = useState(false);
   const [notifications, setNotifications] = useState(false);
   const selectedOrder=route.orderId;

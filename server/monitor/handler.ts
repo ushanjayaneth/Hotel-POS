@@ -126,26 +126,20 @@ export function createMonitorHandler(options:MonitorOptions={}) {
         fail('Another device changed this workspace. Refresh and try again.',409,'CLOUD_BUSY');
       }
       if(action==='active-source'&&method==='GET'){
-        const list=(await store.list()).filter(source=>!source.revoked);
-        let shared=list.find(source=>source.shared)||list[0]||null;
-        if(!shared){
-          const sourceId='main-store';
-          const epoch=randomUUID(),timestamp=now();
-          const source:CloudSource={sourceId,workspaceId:'ws-main',businessName:'Hotel POS',deviceName:'Primary Store',epoch,sequence:0,ready:true,updatedAt:timestamp,lastSeenAt:timestamp,revoked:false,shared:true};
-          const projection:Projection={revision:1,source,records:{},metadata:{deviceId:sourceId},commands:{}};
-          await store.replace(sourceId,null,projection);
-          shared=source;
-        }
-        return reply({sourceId:shared.sourceId,shared:true});
+        let list: CloudSource[] = [];
+        try { list = (await store.list()).filter(source=>!source.revoked); } catch {}
+        const shared = list.find(source=>source.shared) || list[0] || null;
+        return reply({sourceId:shared?.sourceId??'main-store',shared:true});
       }
       if(action==='auto-enroll'&&method==='POST'){
         const input=z.object({sourceId:id.optional(),businessName:z.string().trim().min(1).max(100).optional(),deviceName:z.string().trim().min(1).max(100).optional(),workspaceId:id.optional()}).parse(body);
-        const list=(await store.list()).filter(source=>!source.revoked);
+        let list: CloudSource[] = [];
+        try { list = (await store.list()).filter(source=>!source.revoked); } catch {}
         let target=list.find(source=>source.shared)||list[0]||null;
         const epoch=randomUUID(),timestamp=now();
         if(!target){
           const targetSourceId=input.sourceId||'main-store';
-          const source:CloudSource={sourceId:targetSourceId,workspaceId:input.workspaceId||'ws-main',businessName:input.businessName||'Hotel POS',deviceName:input.deviceName||'Counter',epoch,sequence:0,ready:true,updatedAt:timestamp,lastSeenAt:timestamp,revoked:false,shared:true};
+          const source:CloudSource={sourceId:targetSourceId,workspaceId:input.workspaceId||'ws-main',businessName:input.businessName||'Hotel POS',deviceName:input.deviceName||'Counter',epoch,sequence:0,ready:true,updatedAt:timestamp,lastSeenAt:timestamp,revoked:false,shared:true,dataVersion:0};
           const projection:Projection={revision:1,source,records:{},metadata:{deviceId:targetSourceId},commands:{}};
           await store.replace(targetSourceId,null,projection);
           target=source;
@@ -211,7 +205,11 @@ export function createMonitorHandler(options:MonitorOptions={}) {
       if(error instanceof z.ZodError)return reply({error:error.issues.map(issue=>issue.message).join('; '),code:'VALIDATION_ERROR'},400);
       const value=error as Error&{status?:number;code?:string};
       const status=value.status??500;
-      return reply({error:status>=500?'The cloud database is unavailable. Local device data has not been deleted.':value.message,code:value.code??'CLOUD_ERROR'},status);
+      return reply({
+        error:status>=500?'The cloud database is unavailable. Local device data has not been deleted.':value.message,
+        code:value.code??'CLOUD_ERROR',
+        details:value.message
+      },status);
     }
   };
 }

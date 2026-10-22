@@ -45,9 +45,29 @@ export class FirebaseMonitorStore implements MonitorStore {
   private root() { return this.database.ref(`hotelMonitor/${this.tenant}`); }
   async touch(id: string, time: string) { await this.root().child(`index/${id}/lastSeenAt`).set(time); }
   async publish(source: CloudSource) {
+    const cleanSource: CloudSource = {
+      sourceId: source.sourceId,
+      workspaceId: source.workspaceId,
+      businessName: source.businessName,
+      deviceName: source.deviceName,
+      epoch: source.epoch,
+      sequence: source.sequence ?? 0,
+      ready: Boolean(source.ready),
+      updatedAt: source.updatedAt,
+      lastSeenAt: source.lastSeenAt,
+      revoked: Boolean(source.revoked),
+      shared: Boolean(source.shared ?? true),
+      dataVersion: Number(source.dataVersion ?? 0)
+    };
     await this.root().child(`index/${source.sourceId}`).transaction(current => {
-      const lastSeenAt = current?.lastSeenAt > source.lastSeenAt ? current.lastSeenAt : source.lastSeenAt;
-      return (current?.dataVersion ?? -1) > (source.dataVersion ?? 0) ? { ...current, lastSeenAt } : { ...source, lastSeenAt };
+      const lastSeenAt = current?.lastSeenAt && current.lastSeenAt > cleanSource.lastSeenAt ? current.lastSeenAt : cleanSource.lastSeenAt;
+      const base = current && (current.dataVersion ?? -1) > (cleanSource.dataVersion ?? 0) ? current : cleanSource;
+      return {
+        ...base,
+        lastSeenAt,
+        shared: Boolean(base.shared ?? true),
+        dataVersion: Number(base.dataVersion ?? 0)
+      };
     }, undefined, false);
   }
   async get(id: string) {
@@ -59,6 +79,8 @@ export class FirebaseMonitorStore implements MonitorStore {
     return Object.values(values ?? {});
   }
   async replace(id: string, expected: number | null, next: Projection) {
+    next.source.dataVersion = Number(next.source.dataVersion ?? 0);
+    next.source.shared = Boolean(next.source.shared ?? true);
     const result = await this.root().child(`sources/${id}`).transaction(current => {
       if ((current?.revision ?? null) !== expected) return undefined;
       // JSON preserves empty arrays and null fields that RTDB would otherwise prune.
