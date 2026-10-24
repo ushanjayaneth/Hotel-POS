@@ -3,6 +3,7 @@ import {z} from 'zod';
 import {CLOUD_MONITOR_KINDS,CLOUD_MONITOR_MAX_BYTES,type CloudSource,type CloudChange} from '../../shared/cloud-monitor.js';
 import {firebaseMonitorStore,recordKey,type MonitorStore,type Projection} from './store.js';
 import {monitorBootstrap,monitorCommand} from './engine.js';
+import {applyOfflineCommit,offlineCloudState,offlineCommitSchema} from './offline.js';
 
 const id=z.string().regex(/^[A-Za-z0-9_-]{1,160}$/);
 const change=z.object({kind:z.enum(CLOUD_MONITOR_KINDS),id:z.string().min(1).max(160),branchId:z.string().max(160).nullable(),value:z.record(z.string(),z.unknown())}).strict();
@@ -223,7 +224,31 @@ export function createMonitorHandler(options:MonitorOptions={}) {
         if(Date.now()-new Date(index!.lastSeenAt).getTime()>30000)await store.touch(sourceId,now());
         if(url.searchParams.get('ifVersion')===String(index!.dataVersion??0))return reply({notModified:true,serverTime:now()});
         const projection=await store.get(sourceId);check(projection?.source.shared&&!projection.source.revoked&&projection.source.ready,'Enable shared POS for this workspace after its initial upload completes.',409);
-        const data=await monitorBootstrap(projection!,url.searchParams);data.sync={...data.sync,configured:true,lastSync:projection!.source.updatedAt};return reply({...data,cloudVersion:projection!.source.dataVersion??0});
+        const data=await monitorBootstrap(projection!,url.searchParams);data.sync={...data.sync,configured:true,lastSync:projection!.source.updatedAt};return reply({...data,cloudVersion:projection!.source.dataVersion??0,...(url.searchParams.get('includeOffline')==='1'?{offlineState:offlineCloudState(projection!)}:{})});
+      }
+      if(action==='offline-commit'&&method==='POST'){
+        const input=offlineCommitSchema.parse(body);
+        for(const effect of input.changes){if(effect.before)validateData(effect.before);if(effect.after)validateData(effect.after);}
+        // A transport failure may upgrade an unacknowledged online command to
+        // offline-completed. The immutable effects still identify one receipt.
+        const {offline:_offline,...identity}=input;
+        const key=recordKey('offline-command',JSON.stringify([input.deviceId,input.transactionId])),digest=hash(stable(identity));
+        for(let attempt=0;attempt<6;attempt++){
+          const projection=await store.get(sourceId);
+          check(projection?.source.shared&&projection.source.ready&&!projection.source.revoked,'The shared workspace is unavailable. The transaction remains saved on this device.',409,'WORKSPACE_UNAVAILABLE');
+          const prior=projection!.commands?.[key];
+          if(prior){
+            check(prior.hash===digest,'The offline transaction ID was reused with different data.',409,'IDEMPOTENCY_CONFLICT');
+            await store.publish(projection!.source);return reply(prior.response);
+          }
+          const next=structuredClone(projection!),result=applyOfflineCommit(next,input);
+          next.source.updatedAt=now();next.source.lastSeenAt=now();next.revision++;
+          next.source.dataVersion=(next.source.dataVersion??0)+1;
+          const response={...result,cloudVersion:next.source.dataVersion};
+          next.commands??={};next.commands[key]={hash:digest,response};
+          if(await store.replace(sourceId,projection!.revision,next))return reply(response);
+        }
+        return fail('Another device is syncing transactions. Your saved transaction will retry.',409,'CLOUD_BUSY');
       }
       if(['revoke','promote','command'].includes(action)&&method==='POST'){
         for(let attempt=0;attempt<6;attempt++){

@@ -58,6 +58,8 @@ import {syncLocalProductPhotos} from './lib/media';
 import {flushBeforeAppUpdate} from './lib/update-safety';
 import {sharedCloudSource} from './lib/cloud-shared';
 import {cloudRequest,openAutomaticCloudWorkspace,syncDeviceCloud} from './lib/cloud-sync';
+import {authorizeOfflineSession,clearOfflineSession,getOfflineStatus,offlineSession} from './lib/cloud-offline';
+import {cloudPOSUser} from './lib/cloud-runtime';
 import {requestDevicePersistence} from './lib/local/storage';
 import ConnectivityStatus from './components/ConnectivityStatus';
 
@@ -476,7 +478,7 @@ function WorkspaceApp() {
       if (generation !== requestGeneration.current || latestRefreshIdentity.current!==identity) return;
       setData(snapshot);
       if(sharedCloudSource())uiStorage.setItem('dh-cloud-preferred-source',sharedCloudSource()!);
-      setHubOnline(true);
+      setHubOnline(snapshot.sync.hubOnline!==false);
       setLoadError("");
       if(!deviceMode)await browserDb.snapshots
         .put({
@@ -528,7 +530,9 @@ function WorkspaceApp() {
     const interval = setInterval(() => {
       if (document.visibilityState === "visible") void refresh();
     }, sharedCloudSource()?5000:12000);
-    return () => clearInterval(interval);
+    const connected=()=>{void refresh();};
+    if(sharedCloudSource()){window.addEventListener('online',connected);window.addEventListener('offline',connected);}
+    return () => {clearInterval(interval);window.removeEventListener('online',connected);window.removeEventListener('offline',connected);};
   }, [refresh]);
   useEffect(() => {
     if (!user) return;
@@ -540,6 +544,7 @@ function WorkspaceApp() {
     async <T,>(path: string, body?: unknown, method?: string): Promise<T> => {
       localWrites.current++;
       try{const result = await api<T>(path, body, method);await refresh(true);return result;}
+      catch(error){if(sharedCloudSource())await refresh(true);throw error;}
       finally{localWrites.current--;}
     },
     [refresh],
@@ -674,7 +679,7 @@ function WorkspaceApp() {
             <div className="hub-status">
               <i className={`status-dot ${!hubOnline ? "offline" : ""}`} />
               <span>
-                {sharedCloudSource()?(hubOnline?'Shared cloud connected':'Cloud unavailable'):deviceMode?'Device database ready':hubOnline ? "Branch hub connected" : "Hub unavailable"}
+                {sharedCloudSource()?(data.sync.cloudOnline===false?'Offline billing ready':data.sync.pending?'Cloud sync pending':hubOnline?'Shared cloud connected':'Cloud unavailable'):deviceMode?'Device database ready':hubOnline ? "Branch hub connected" : "Hub unavailable"}
               </span>
             </div>
             <div className="user-card">
@@ -794,6 +799,7 @@ function WorkspaceApp() {
             )}
           </header>
           <div className="workspace">
+            {sharedCloudSource()&&(data.sync.cloudOnline===false||data.sync.pending>0)&&<div className="notice-banner" role="status"><WifiOff size={16}/><span>{data.sync.cloudOnline===false?'Working offline. Bills, payments and receipts are saved on this device.':'Your saved bills are uploading.'} {data.sync.pending>0?`${data.sync.pending} saved updates waiting to sync. `:''}They upload automatically when this app can reach the cloud.{data.sync.lastError?` ${data.sync.lastError}`:''}</span></div>}
             {!hubOnline && (
               <div className="notice-banner">
                 <WifiOff size={16} /> The branch hub is unavailable. Viewing
@@ -901,9 +907,24 @@ function CloudPOSEntry({source}:{source?:string}){
   useEffect(()=>{
     let active=true;
     setError('');
-    void cloudRequest<{authenticated:boolean}>('pos-session').then(value=>{
-      if(active)setAuthenticated(value.authenticated);
-    }).catch(error=>{if(active)setError((error as Error).message);});
+    const remembered=source??uiStorage.getItem('dh-cloud-preferred-source');
+    const cached=async()=>{
+      if(!remembered||!/^[A-Za-z0-9_-]{1,160}$/.test(remembered))return false;
+      const [user,state]=await Promise.all([offlineSession(remembered),getOfflineStatus(remembered)]);
+      if(!user||!state.ready)return false;
+      if(!active)return true;
+      if(!source)location.replace(`/?shared=${encodeURIComponent(remembered)}`);
+      else setAuthenticated(true);
+      return true;
+    };
+    void (async()=>{
+      if(navigator.onLine===false){if(!await cached())throw new Error('Open this device once while online before using offline billing.');return;}
+      try{
+        const value=await cloudRequest<{authenticated:boolean}>('pos-session');
+        if(remembered){if(value.authenticated)await authorizeOfflineSession(remembered,cloudPOSUser);else await clearOfflineSession(remembered);}
+        if(active)setAuthenticated(value.authenticated);
+      }catch(error){const status=(error as {status?:number}).status;if((!status||status>=500)&&await cached())return;throw error;}
+    })().catch(error=>{if(active)setError((error as Error).message);});
     return()=>{active=false;};
   },[attempt]);
   useEffect(()=>{
@@ -925,6 +946,7 @@ function CloudPOSEntry({source}:{source?:string}){
   },[authenticated,attempt,source]);
   const signIn=async(pin:string)=>{
     await cloudRequest('pos-login',{pin});
+    if(source)await authorizeOfflineSession(source,cloudPOSUser);
     if(source){location.reload();return;}
     opening.current=null;
     setError('');

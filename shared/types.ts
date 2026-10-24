@@ -246,6 +246,8 @@ export interface SyncState {
   lastError: string | null;
   lastBackup: string | null;
   hubOnline: boolean;
+  cloudOnline?: boolean;
+  offlineReady?: boolean;
 }
 export interface Settings {
   businessName: string;
