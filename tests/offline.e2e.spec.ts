@@ -71,7 +71,8 @@ async function setupWithoutBackend(page: Page) {
     });
     Object.defineProperty(navigator.storage, 'persisted', {configurable: true, value: async () => false});
   });
-  await page.goto('/');
+  // Independent offline mode is explicit; the normal configured address opens cloud POS.
+  await page.goto('/?local=1');
   await page.getByRole('button', {name: 'Set up this device', exact: true}).click();
   const dialog = page.getByRole('dialog', {name: 'Set up this device', exact: true});
   await dialog.getByLabel('Business name', {exact: true}).fill(businessName);

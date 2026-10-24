@@ -1177,7 +1177,6 @@ export default function POS({
                 required
                 maxLength={120}
                 placeholder="Guest name, table or reference"
-                autoFocus
               />
             </label>
             <p className="held-bill-note">

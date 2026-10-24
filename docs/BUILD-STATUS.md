@@ -5,11 +5,14 @@ This repository contains a working local evaluation version of DEMO HOTEL. It is
 ## Implemented
 
 - Optional Vercel/Firebase owner live view, device baseline/journal uploads with durable retry, private owner sessions and scoped device grants; requires the real server credentials and deployment checks in [CLOUD-SYNC.md](CLOUD-SYNC.md).
+- Authenticated cloud recovery after clearing browser data: reopen the same shared stock, sales and loan records after owner sign-in, without creating a default local PIN or overwriting an independent local database. Anonymous data reads/enrollment and obsolete writer grants are rejected.
 - Optional shared **online owner** POS with atomic cloud stock checks and command replay. Local staff PIN migration and automatic offline financial merging remain outside this feature.
 - Separate network/cloud status dots, touch quantity/amount numpads, compatible recipe weight/volume conversions, and captured-cost wastage logs/exports with operating-estimate deductions.
 - Safe manual PWA updates that flush drafts, stop on failed/pending storage and do not reload other active tabs automatically.
+- Dialogs rendered above glass panels, including offline backup export/restore, with nested scroll locks and keyboard-aware mobile sizing.
+- Backend-configured automatic shared workspace entry without a Cloud connection form in Settings; the original owner's pending journal is uploaded before switching its source to shared authority.
 
-- English desktop, tablet, and phone interface with the dark glass design.
+- English desktop, tablet, and phone interface with the dark glass design; tested touch layouts from 320 to 768 px and 140% app text, focus-zoom prevention and dialogs that scroll above the phone keyboard.
 - PIN sessions, server-side staff roles, branch access, and audit records.
 - Menu and recipe editing, cashier search, persistent device drafts, tables, kitchen tickets, and preparation status.
 - Server-priced orders, cash/card/QR payment records, partial payments, refunds, receipts, and cash shifts.

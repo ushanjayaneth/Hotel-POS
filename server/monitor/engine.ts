@@ -19,7 +19,7 @@ export class ProjectionStore {
   }
   async remove(kind:string,id:string) {delete this.projection.records[recordKey(kind,id)];}
   async meta<T=string>(key:string) {return this.projection.metadata[key] as T|undefined;}
-  async setMeta(key:string,value:unknown) {this.projection.metadata[key]=value;}
+  async setMeta(key:string,value:unknown) {this.projection.metadata[key]=value;if(key==='settings')this.projection.records[recordKey('settings','settings')]={kind:'settings',id:'settings',branchId:null,value:value as Record<string,unknown>};}
 }
 export const monitorUser: User={id:'cloud-owner',name:'Cloud owner',initials:'CO',role:'owner',branchId:null};
 export async function monitorBootstrap(projection:Projection,query:URLSearchParams) {

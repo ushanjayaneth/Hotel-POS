@@ -18,6 +18,9 @@ export default defineConfig({
   reporter: [['list'], ['html', {open: 'never'}]],
   use: {
     baseURL,
+    // Hub scenarios explicitly select their isolated test hub. A fresh real
+    // browser defaults to an independent device or authenticated cloud recovery.
+    storageState: {cookies: [], origins: [{origin: baseURL, localStorage: [{name: 'dh-workspace-mode', value: 'hub'}]}]},
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     serviceWorkers: 'block',

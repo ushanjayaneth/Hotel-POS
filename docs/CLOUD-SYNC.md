@@ -18,19 +18,21 @@ This feature adds a Vercel Node function at `/api/cloud`, Firebase Admin persist
 
 `CLOUD_TENANT_ID` optionally selects an isolated database namespace; use a stable letters/digits/underscore/hyphen name. Changing it shows a different workspace set. Changing the owner email/password or signing secret invalidates existing owner sessions and device grants; reconnect each authorized device afterward.
 
-## Start with local offline sales and remote viewing
+## Automatic connection, without a Settings connection form
 
-1. On the shop device sign in as its local owner and open **Settings → Cloud connection & owner live view**.
-2. Enter the cloud owner email/password and a clear device label, then choose **Connect this shop device**.
-3. Keep the app open for the first upload. It reads a consistent local baseline, then uploads later journal transactions in order. Credentials, PINs, sessions, private keys and uploaded photo bytes are excluded. Product photo links remain available; locally uploaded `/api/media` photos stay on the original device.
-4. On the owner's phone open the same site's `/?cloud=1`, sign in with the **cloud owner account**, choose the shop and branch, and review stock, sales, loans, expenses and profit/CSV reports.
-5. Local changes upload after a short debounce; the viewer checks metadata every 10 seconds while visible and fetches changed records. Use Refresh for an immediate check. This is near-live polling, not a guarantee of instantaneous delivery.
+The Firebase URL and Admin credentials stay configured on the backend. There is no Cloud connection setup form in Settings. When the server is configured, the normal app address opens the cloud owner sign-in and then the shared restaurant workspace automatically. After a successful sign-in, the same saved workspace is remembered for later app launches.
 
-Local sales continue offline. Pending journal records are retained and retried after reconnection while the app is open. A suspended/closed PWA cannot promise background execution. The dashboard shows the last uploaded data and its timestamp when the shop is disconnected. Independent devices are separate sources; their stock is never blindly added or overwritten.
+- Every authorized phone, PC and tablet opens the normal app URL and signs in with the cloud owner email/password. A sole ready shared workspace opens automatically. Several business workspaces require an explicit choice; their stock is not merged.
+- If there is no cloud business yet, the original device's signed-in local owner is transferred automatically as a consistent baseline followed by pending journal changes, then that source becomes shared. The original local database is retained. An existing cloud business always takes precedence over a different local copy; the app never uploads that copy over shared stock.
+- If there is no cloud business and no saved local workspace, the authenticated owner gets one empty shared business with a Main branch and General category. Simultaneous first launches create one cloud workspace. No anonymous write access or default local PIN is created.
+- An incomplete original upload is kept for resuming; a second device does not create an empty competing workspace. If local owner authentication has expired during the first transfer, open the original device copy with `/?local=1`, sign in with its private PIN, then return to the normal app address.
+- `/?cloud=1` opens the owner's stock, sales, loans, expenses and profit/CSV dashboard. It checks metadata every 10 seconds while visible; the shared POS checks changes every 5 seconds. The network and cloud dots report different states.
+
+`/?local=1` deliberately opens the independent original copy for backup/recovery. It is not a simultaneous second cashier for shared stock. Local-only changes are not automatically merged after cloud authority is established. Background uploads require the app to remain open and online; a suspended PWA cannot promise background work. Local credentials, uploaded photo bytes and device drafts stay in local backups.
 
 ## Use the same POS from several online devices
 
-After the initial upload, the owner can select **Enable shared POS** in Owner live view. Export an external backup first and finish pending uploads. The confirmation explains the change of authority.
+The normal app address opens the ready shared workspace automatically after owner sign-in. The first original-device transfer finishes its upload before becoming shared. Export an external backup of the original local workspace before using the cloud for live work. Legacy monitoring-only sources can also be promoted through **Enable shared POS** in Owner live view.
 
 - Open the resulting `/?shared=SOURCE_ID` URL on **every** device, including the original shop counter. Sign in with the cloud owner email/password. A successfully opened shared workspace is remembered for future PWA launches. Use `/?local=1` only to open the original independent local copy; its later changes do not merge into shared stock. This first implementation authorizes the owner account; local staff PINs/roles are not cloud login accounts.
 - Orders, payments, loans, collections, stock, recipes, production, purchases and supported management actions run through the same validated business operations. Firebase compare-and-swap commits the complete transaction. Stock conflicts roll back; repeating an identical command returns its original result.
@@ -39,6 +41,27 @@ After the initial upload, the owner can select **Enable shared POS** in Owner li
 - Shared owner mode does not migrate staff PIN authentication, hardware discovery, uploaded photos or backup replacement. Use supported photo links; retain the original encrypted local backup. Do not describe this as complete offline multi-device reconciliation.
 
 The owner dashboard is read-only until the separate shared POS is enabled/opened. Source/branch filters do not combine independent workspaces. Source revocation stops upload access and removes it from owner reads without silently erasing local data.
+
+## Recovery after browser clearing or device loss
+
+Cloud recovery covers records that the server actually acknowledged. A cloud connection setting, green network dot or installed PWA alone is not evidence that a particular sale was uploaded.
+
+1. On a replacement device, or after clearing site data, open the normal trusted app address while online. With a configured backend it opens the cloud owner sign-in automatically. `/?cloud=1&restore=1` is also available for explicit recovery.
+2. Sign in with the **cloud owner email and password**. Clearing site data also clears sessions and the saved workspace preference, so the app cannot safely restore private shop records into an anonymous browser.
+3. If there is exactly one ready shared workspace, recovery opens it automatically after sign-in. Otherwise choose the intended shop/workspace and **Open shared POS**. The app loads its authorized cloud records and remembers that shared workspace again. Use the same shared URL on all authorized devices. A still-valid owner session can reopen the sole ready shared workspace without entering the password again; a fresh anonymous browser must authenticate.
+4. Compare the latest sale, stock and customer balance with the expected records before resuming work. If there are several independent sources, select the intended one; they are not interchangeable restore points.
+
+The owner must enable shared POS before using a monitoring-only source as the authoritative workspace. Keep the original local backup: the monitoring projection deliberately excludes local staff credentials, active sessions, uploaded photo bytes, device drafts and the local command/journal store. Reopening a shared workspace does not reconstruct those omitted parts of an independent device database. Use a verified `.hotelbackup` for complete local recovery; that file does not contain shared-cloud changes made after the local export.
+
+An offline sale that never reached the server, an unfinished device draft, or a photo stored only on a lost phone cannot be recovered from Firebase. The cloud is also subject to administrative deletion, account access, quotas and service availability. Do not advertise absolute zero data loss or permanent unlimited retention. The same applies to automatic two-way offline merging: several independent local writers do not reconcile their sales automatically. Shared online devices instead submit transactions to one cloud authority.
+
+## Persistent storage, installation and external backup
+
+The app requests persistent browser storage once after a real workspace opens where the API is supported, including shared workspace caches and drafts. It remembers a denied request and does not repeat it automatically on every launch; **Settings → Device storage & backups** provides a manual retry. The browser decides whether to grant it. Usage/quota and permission state are shown in Settings for both device and shared modes.
+
+Persistence protects granted origins from automatic storage-pressure eviction. It does not prevent deliberate site-data deletion, profile removal, formatting or loss of the device. PWA installation still uses browser-managed site storage; it does not create a second protected database. Clearing ordinary history and clearing website data are different operations. See [Chrome's persistent storage guidance](https://web.dev/articles/persistent-storage).
+
+For an independent device workspace, the Owner can export an AES-256-GCM password-protected `.hotelbackup` with local records, uploaded photos, credential hashes, journal and saved drafts. Keep several dated files outside the operating browser and their passwords separately. Test a restore on a spare empty profile. The shared Settings panel does not present local backup replacement as a cloud restore; retain the original local file and arrange independent backups of the Firebase project according to the agreed recovery plan.
 
 ## Connection indicators and acceptance
 

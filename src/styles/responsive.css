@@ -21,6 +21,10 @@ html, body, #root {
   overscroll-behavior: contain;
 }
 
+.modal {
+  max-height: calc(var(--dialog-viewport-height, 100dvh) - 48px);
+}
+
 .modal-header > div, .error-message, .cloud-note, .cloud-header p {
   min-width: 0;
   overflow-wrap: anywhere;
@@ -127,7 +131,7 @@ html, body, #root {
   }
 
   .modal {
-    max-height: calc(100dvh - 20px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    max-height: calc(var(--dialog-viewport-height, 100dvh) - 20px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
     padding: 18px;
     scroll-padding-block: 18px;
   }
@@ -286,3 +290,5 @@ html, body, #root {
     padding: 18px;
   }
 }
+
+.settings-layout.settings-cloud { grid-template-columns: minmax(0, 1fr); }

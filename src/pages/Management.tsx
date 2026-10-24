@@ -4,6 +4,7 @@ import ProfitSummary from '../components/ProfitSummary';
 import WastageLog from '../components/WastageLog';
 import {apiResponse} from '../lib/api';
 import {isDeviceWorkspace} from '../lib/workspace-mode';
+import {sharedCloudSource} from '../lib/cloud-shared';
 import {
   useEffect,
   useMemo,
@@ -2534,7 +2535,7 @@ export default function Management({ page }: { page: Page }) {
       )}
 
       {page === "settings" && (
-        <div className="settings-layout">
+        <div className={`settings-layout ${sharedCloudSource()?'settings-cloud':''}`}>
           <div className="settings-main">
             <form
               className="panel settings-card"
@@ -2724,7 +2725,7 @@ export default function Management({ page }: { page: Page }) {
               </div>
             </section>
           </div>
-          <aside className="settings-aside">
+          {!sharedCloudSource()&&<aside className="settings-aside">
             <section className="panel settings-sync">
               <div className="settings-sync-symbol">
                 <ShieldCheck size={28} />
@@ -2826,7 +2827,7 @@ export default function Management({ page }: { page: Page }) {
                 {"Create & download backup"}
               </button>
             </section>}
-          </aside>
+          </aside>}
         </div>
       )}
 

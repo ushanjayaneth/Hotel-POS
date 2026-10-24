@@ -7,15 +7,16 @@ Keep the completed [customer handover record](CUSTOMER-HANDOVER.md), the trusted
 - **Device workspace:** open the same app URL in the same browser/profile used for setup, or its installed PWA. On a new empty device, choose **Set up this device** on the sign-in screen, enter the business/owner details, and create a private **6-12 digit Owner PIN**. Leave sample data off for a new live business. There is no fixed default owner PIN for a new device workspace.
 - **Existing workspace:** sign in with your private PIN. There is no separate admin URL; the Owner role has management access. If existing records suddenly appear missing, stop and check the URL/browser/profile before creating a new workspace.
 - **Shared branch hub:** use the branch's agreed HTTPS address and staff PIN. The hub and local network must be running. A device workspace on another phone is a separate database, even if it uses the same public website.
+- **Shared cloud POS:** open the agreed `/?shared=SOURCE_ID` link on every device, including the till, and sign in with the cloud owner account. Confirmed transactions use the same cloud stock and customer balances. The first implementation uses the owner account; local staff PIN accounts are not cloud accounts. Internet is required to confirm shared transactions.
 
-First setup and app caching need an online connection. After caching, test offline use before relying on it. Settings offers **Install app** where supported; the browser may also provide an install/add-to-home-screen menu. Installation does not create an independent backup.
+First setup and app caching need an online connection. After caching, test offline use before relying on it. Settings offers **Install app** where supported; the browser may also provide an install/add-to-home-screen menu. Installation does not create an independent backup or prevent site-data clearing. The app requests persistent storage once where supported, remembers refusals and offers a manual retry in Settings. The permission protects against automatic eviction, not deliberate deletion, formatting or device loss.
 
 ## Before opening the till
 
 1. Check the correct branch/workspace and today's opening stock. Review low-stock items and any unfinished bills.
 2. Open a cash shift and enter the actual opening cash before accepting cash payments or cash debt collections.
 3. Check paper and print a test receipt after changing the printer. Adjust receipt paper/content width and margins in Settings; test the actual result.
-4. Use the assigned staff PIN rather than sharing owner access.
+4. In local/hub mode, use the assigned staff PIN. Keep cloud owner credentials restricted to authorized people; cloud staff PIN authentication is not part of this release.
 
 ## Make a sale
 
@@ -49,6 +50,7 @@ For prepared food, record ingredients and packaging in their correct inventory u
 2. Count cash and complete the shift/day-end reconciliation. Download the required reports and investigate differences.
 3. **Device mode:** as Owner, open **Settings -> Device storage & backups**, export an encrypted `.hotelbackup` file using a strong password of at least ten characters, and copy it to the agreed independent storage. Keep several dated copies and the password separately.
 4. **Hub mode:** follow the agreed full database backup procedure in the [operations runbook](OPERATIONS.md). A frontend download or cached snapshot is not a full hub backup.
+5. **Cloud mode:** verify the actual cloud acknowledgement and recent sale on a separate device. Keep an independent cloud recovery plan and the original local backup. The local `.hotelbackup` does not include later transactions made only in the shared cloud workspace.
 
 Do not clear site data, use private browsing for live records, delete the operating browser profile, or change the app address without a recovery plan. The browser controls storage capacity; keep free space and independent backups even after installing the app. A backup download message does not verify that the file was copied safely.
 
@@ -58,11 +60,14 @@ Periodically test a device backup through **Restore device backup** in an empty 
 
 - For a printer problem, check the saved sale in history and reprint after fixing the printer. Avoid a duplicate sale.
 - For an internet outage, a cached device workspace can keep working. A shared-hub installation can keep working while its hub and LAN remain available; a hub-disconnected device can retain drafts but cannot confirm hub transactions.
+- In shared cloud mode, an outage leaves new work as a draft on the current device; confirm it after the connection returns. Separate offline writers do not automatically merge their financial records.
 - For a storage/save error, stop repeated checkout attempts, keep any unsaved details, check the saved history, free space or contact support, and retry only after confirming the previous result. Do not clear site data to fix storage.
 - For lost records or a damaged device, preserve the device and latest backup; contact the named support person before replacing or resetting data.
+
+For cloud records after browser clearing or device loss, open the normal app address while online and sign in with the cloud owner account. A sole ready shared workspace opens automatically; if there are several, choose the intended workspace and **Open shared POS**. Its authorized records load again. Clearing site data removes remembered logins and workspace preferences, so recovery requires authentication. Check the latest sale, stock and loan balance before using the till again. Unuploaded offline changes, local photos, staff PIN credentials and unfinished device drafts are not recovered by reopening shared POS. A verified local `.hotelbackup` is needed for the omitted parts of the original local workspace.
 
 Support contact / hours: ______________________________
 
 Backup operator / storage location: ______________________________
 
-Read [sales and customer dues](POS-SALES.md) for transaction details and the [device workspace guide](DEVICE-WORKSPACE.md) for storage, photos, backup/restore, and operating limits. Separate devices do not automatically synchronize their sales, stock, or dues with Firebase.
+Read [sales and customer dues](POS-SALES.md), the [device workspace guide](DEVICE-WORKSPACE.md) and the [cloud setup and recovery guide](CLOUD-SYNC.md). Independent device workspaces remain separate unless explicitly paired for viewing or moved to the same shared online workspace. Only acknowledged cloud records can be recovered from the cloud; installing the app alone does not provide that guarantee.

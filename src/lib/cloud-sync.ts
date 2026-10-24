@@ -43,142 +43,74 @@ export async function getCloudSyncState(db:LocalDatabase=localDb):Promise<CloudS
   const {token:_,epoch:__,baseline,...publicState}=value;
   return {...publicState,linked:true,pending:(baseline?baseline.chunks.length-baseline.index:0)+Math.max(0,journalSequence-(baseline?.cursor??value.cursor))};
 }
-export async function connectDeviceToCloud(input:{email:string;password:string;deviceName:string},options:Options={}):Promise<CloudSyncState>{
+async function ownerSessionPair(deviceName:string,options:Options={},replaceObsolete=false):Promise<CloudSyncState>{
   const db=options.db??localDb,request=options.fetch??fetch;
-  if((await getLocalUser(db))?.role!=='owner')throw new Error('Only the device owner can connect cloud monitoring.');
-  if(await db.metadata.get(key))throw new Error('Disconnect the existing cloud connection first.');
+  if((await getLocalUser(db))?.role!=='owner')throw new Error('Open the original device copy and sign in as its owner before transferring saved local records.');
+  if(!replaceObsolete&&await db.metadata.get(key))throw new Error('Disconnect the existing cloud connection first.');
   const info=await getLocalWorkspaceInfo(db);if(!info)throw new Error('Set up this device first.');
-  const send=async<T>(action:string,body:unknown):Promise<T>=>{
-    const response=await request(`/api/cloud?action=${action}`,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(20000)});
-    const value=await response.json();if(!response.ok)throw Object.assign(new Error(value.error??'Cloud connection failed.'),{status:response.status});return value;
-  };
-  await send('login',{email:input.email,password:input.password});
   const sourceId=`source-${crypto.randomUUID()}`;
-  const enrolled=await send<CloudEnrollmentResult>('enroll',{sourceId,workspaceId:info.workspaceId,businessName:info.businessName,deviceName:input.deviceName});
+  const enrolled=await cloudRequestWith(request,'enroll',{sourceId,workspaceId:info.workspaceId,businessName:info.businessName,deviceName}) as CloudEnrollmentResult;
   const baseline=await db.transaction('r',db.records,db.metadata,async()=>{
     const rows=(await db.records.toArray()).map(({kind,id,branchId,value})=>({kind,id,branchId,value}));
     rows.push({kind:'settings',id:'settings',branchId:null,value:(await db.metadata.get('settings'))?.value});
     return {chunks:cloudChunks(monitoringChanges(rows)),index:0,cursor:Number((await db.metadata.get('journalSequence'))?.value??0)};
   });
-  const connection:Connection={...enrolled,deviceName:input.deviceName,businessName:info.businessName,baseline,sequence:0,cursor:0,lastUploadedAt:null,lastSeenAt:null,lastError:'',needsReconnect:false};
+  const connection:Connection={...enrolled,deviceName,businessName:info.businessName,baseline,sequence:0,cursor:0,lastUploadedAt:null,lastSeenAt:null,lastError:'',needsReconnect:false};
   await db.metadata.put({key,value:connection});changed();return (await getCloudSyncState(db))!;
+}
+async function cloudRequestWith(request:typeof fetch,action:string,body?:unknown):Promise<unknown>{
+  const response=await request(`/api/cloud?action=${action}`,{method:body===undefined?'GET':'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(20000)});
+  const value=await response.json();
+  if(!response.ok)throw Object.assign(new Error(value.error??'Cloud connection failed.'),{status:response.status,code:value.code});
+  return value;
+}
+export async function connectDeviceToCloud(input:{email:string;password:string;deviceName:string},options:Options={}):Promise<CloudSyncState>{
+  const db=options.db??localDb;
+  if((await getLocalUser(db))?.role!=='owner')throw new Error('Only the device owner can connect cloud monitoring.');
+  if(await db.metadata.get(key))throw new Error('Disconnect the existing cloud connection first.');
+  await cloudRequestWith(options.fetch??fetch,'login',{email:input.email,password:input.password});
+  return ownerSessionPair(input.deviceName,options);
+}
+/** Automatic connection is authorized by the cloud owner session, never an
+ * anonymous write grant. Existing cloud data always takes precedence; local
+ * records are imported only when the server confirms no business exists yet. */
+export async function openAutomaticCloudWorkspace(options:Options={}):Promise<string|null>{
+  const db=options.db??localDb,request=options.fetch??fetch;
+  type Result={sourceId:string|null;empty?:boolean;selectionRequired?:boolean};
+  // Finish this device's already-authorized journal before a monitoring-only
+  // source changes to shared authority. Promotion must not strand its last sales.
+  const before=await getCloudSyncState(db);
+  if(before&&!before.shared&&!before.needsReconnect&&before.pending){
+    const uploaded=await syncDeviceCloud(options);
+    if(uploaded?.lastError&&!uploaded.shared)throw new Error(uploaded.lastError);
+    if(uploaded?.pending&&!uploaded.shared)throw new Error('The original device upload is still in progress. Keep this app open and retry.');
+  }
+  let result=await cloudRequestWith(request,'workspace',{create:false}) as Result;
+  if(result.sourceId)return result.sourceId;
+  if(result.selectionRequired){
+    const pending=await getCloudSyncState(db);
+    if(pending&&!pending.shared&&!pending.needsReconnect&&pending.pending){
+      const synced=await syncDeviceCloud(options);
+      if(synced?.lastError)throw new Error(synced.lastError);
+      result=await cloudRequestWith(request,'workspace',{create:false}) as Result;
+    }
+    if(result.sourceId||result.selectionRequired)return result.sourceId;
+  }
+  const info=await getLocalWorkspaceInfo(db);
+  if(result.empty&&info){
+    if((await getLocalUser(db))?.role!=='owner')throw new Error('Your earlier local records are still on this device. Open the original device copy and sign in as its owner to transfer them.');
+    let state=await getCloudSyncState(db);
+    if(!state||state.needsReconnect||state.shared)state=await ownerSessionPair('Original shop device',options,true);
+    state=await syncDeviceCloud(options);
+    if(state?.needsReconnect){await ownerSessionPair('Original shop device',options,true);state=await syncDeviceCloud(options);}
+    if(!state||state.lastError||state.pending)throw new Error(state?.lastError||'The original device upload is still in progress. Keep this app open and retry.');
+    result=await cloudRequestWith(request,'workspace',{create:false}) as Result;
+  }else if(result.empty){result=await cloudRequestWith(request,'workspace',{create:true}) as Result;}
+  return result.sourceId;
 }
 export async function disconnectDeviceCloud(options:Options={}){
   const db=options.db??localDb;if((await getLocalUser(db))?.role!=='owner')throw new Error('Only the owner can disconnect this device.');
   await db.metadata.delete(key);changed();
-}
-export async function autoConnectDeviceToCloud(options:Options={}):Promise<CloudSyncState|null>{
-  const db=options.db??localDb,request=options.fetch??fetch;
-  if(await db.metadata.get(key))return getCloudSyncState(db);
-  let info=await getLocalWorkspaceInfo(db);
-  if(!info){
-    const restored=await rehydrateFromCloud(db,request).catch(()=>false);
-    if(restored)info=await getLocalWorkspaceInfo(db);
-  }
-  if(!info)return null;
-  try{
-    const activeRes=await request('/api/cloud?action=active-source',{signal:AbortSignal.timeout(10000)}).catch(()=>null);
-    let targetSourceId='main-store';
-    if(activeRes&&activeRes.ok){
-      const active=await activeRes.json();
-      if(active.sourceId)targetSourceId=active.sourceId;
-    }
-    const response=await request('/api/cloud?action=auto-enroll',{
-      method:'POST',credentials:'omit',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({sourceId:targetSourceId,workspaceId:info.workspaceId,businessName:info.businessName,deviceName:'POS Device'}),
-      signal:AbortSignal.timeout(15000)
-    });
-    if(!response.ok)return null;
-    const enrolled=await response.json() as CloudEnrollmentResult;
-    const baseline=await db.transaction('r',db.records,db.metadata,async()=>{
-      const rows=(await db.records.toArray()).map(({kind,id,branchId,value})=>({kind,id,branchId,value}));
-      rows.push({kind:'settings',id:'settings',branchId:null,value:(await db.metadata.get('settings'))?.value});
-      return {chunks:cloudChunks(monitoringChanges(rows)),index:0,cursor:Number((await db.metadata.get('journalSequence'))?.value??0)};
-    });
-    const connection:Connection={...enrolled,deviceName:'POS Device',businessName:info.businessName,baseline,sequence:0,cursor:0,lastUploadedAt:null,lastSeenAt:null,lastError:'',needsReconnect:false};
-    await db.metadata.put({key,value:connection});changed();
-    return await getCloudSyncState(db);
-  }catch{return null;}
-}
-export async function rehydrateFromCloud(db:LocalDatabase=localDb,request:typeof fetch=fetch):Promise<boolean>{
-  try{
-    const activeRes=await request('/api/cloud?action=active-source',{signal:AbortSignal.timeout(10000)}).catch(()=>null);
-    if(!activeRes||!activeRes.ok)return false;
-    const active=await activeRes.json();
-    const sourceId=active.sourceId||'main-store';
-    const snapRes=await request(`/api/cloud?action=snapshot&sourceId=${encodeURIComponent(sourceId)}`,{signal:AbortSignal.timeout(15000)}).catch(()=>null);
-    if(!snapRes||!snapRes.ok)return false;
-    const snap=await snapRes.json() as {source?:any;records?:Array<{kind:string;id:string;branchId:string|null;value:Record<string,unknown>}>;settings?:Record<string,unknown>};
-    if(!snap.records||snap.records.length===0)return false;
-
-    const enrollRes=await request('/api/cloud?action=auto-enroll',{
-      method:'POST',credentials:'omit',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({sourceId,businessName:snap.source?.businessName||'Hotel POS',deviceName:'Restored Device',workspaceId:snap.source?.workspaceId||'ws-main'}),
-      signal:AbortSignal.timeout(15000)
-    }).catch(()=>null);
-    const enrolled=enrollRes&&enrollRes.ok?await enrollRes.json():null;
-
-    const nowStr=new Date().toISOString();
-    const {createLocalCredential,prepareLocalSession,rememberLocalSession}=await import('./local/auth');
-    const ownerId='staff-owner';
-    const credential=await createLocalCredential(ownerId,'1234');
-    const authenticated=await prepareLocalSession(ownerId);
-
-    await db.transaction('rw',db.tables,async()=>{
-      await db.records.clear();
-      for(const r of snap.records!){
-        if(r.kind==='settings')continue;
-        await db.records.put({
-          kind:r.kind,
-          id:r.id,
-          branchId:r.branchId??null,
-          value:r.value,
-          createdAt:(r.value as any)?.createdAt||nowStr,
-          updatedAt:(r.value as any)?.updatedAt||nowStr,
-        });
-      }
-      const workspaceInfo={
-        version:1,
-        workspaceId:snap.source?.workspaceId||'ws-main',
-        deviceId:`dev-${crypto.randomUUID().slice(0,8)}`,
-        businessName:snap.source?.businessName||(snap.settings?.businessName as string)||'Hotel POS',
-        demo:false,
-        createdAt:nowStr,
-      };
-      await db.metadata.put({key:'workspace',value:workspaceInfo});
-      if(snap.settings)await db.metadata.put({key:'settings',value:snap.settings});
-      await db.metadata.put({key:'activeBranchId',value:'b1'});
-      await db.metadata.put({key:'journalSequence',value:0});
-      await db.metadata.put({key:'storagePersistenceAttempted',value:true});
-
-      await db.credentials.put(credential);
-      await db.sessions.put(authenticated.session);
-
-      if(enrolled){
-        const connection:Connection={
-          ...enrolled,
-          deviceName:'Restored Device',
-          businessName:workspaceInfo.businessName,
-          baseline:null,
-          sequence:0,
-          cursor:0,
-          lastUploadedAt:nowStr,
-          lastSeenAt:nowStr,
-          lastError:'',
-          needsReconnect:false,
-        };
-        await db.metadata.put({key,value:connection});
-      }
-    });
-
-    rememberLocalSession(db,authenticated.sessionToken);
-    changed();
-    if(typeof window!=='undefined'){
-      window.dispatchEvent(new CustomEvent('local-workspace-change'));
-      window.dispatchEvent(new CustomEvent('local-workspace-restored'));
-    }
-    return true;
-  }catch{return false;}
 }
 export async function syncDeviceCloud(options:Options={}):Promise<CloudSyncState|null>{
   const db=options.db??localDb,request=options.fetch??fetch;
@@ -213,6 +145,7 @@ export async function syncDeviceCloud(options:Options={}):Promise<CloudSyncState
       const changes=baseline?baseline.chunks[baseline.index]:monitoringChanges(journal!.changes);
       if(new TextEncoder().encode(JSON.stringify(changes)).length>600000)throw new Error('A transaction is too large for cloud sync. Keep the local backup and contact support.');
       const result=await send<{sequence:number;updatedAt:string}>('push',{sourceId:connection.sourceId,epoch:connection.epoch,sequence:connection.sequence+1,eventId:baseline?`baseline-${connection.epoch}-${baseline.index}`:`journal-${journal!.sequence}`,ready:!baseline||baseline.index===baseline.chunks.length-1,changes});
+      if(result.sequence!==connection.sequence+1)throw new Error('Cloud acknowledgement did not match the uploaded packet. Keep this device open and retry.');
       connection.sequence=result.sequence;connection.lastUploadedAt=result.updatedAt;connection.lastSeenAt=result.updatedAt;connection.lastError='';
       if(baseline){baseline.index++;if(baseline.index>=baseline.chunks.length){connection.cursor=baseline.cursor;connection.baseline=null;}}
       else connection.cursor=journal!.sequence;
@@ -226,46 +159,6 @@ export async function syncDeviceCloud(options:Options={}):Promise<CloudSyncState
       await save();
     }
 
-    // Two-way sync: Pull remote records into local IndexedDB
-    try{
-      const snapRes=await request(`/api/cloud?action=snapshot&sourceId=${encodeURIComponent(connection.sourceId)}`,{signal:AbortSignal.timeout(15000)}).catch(()=>null);
-      if(snapRes&&snapRes.ok){
-        const snap=await snapRes.json() as {records?:Array<{kind:string;id:string;branchId:string|null;value:Record<string,unknown>}>;settings?:unknown};
-        if(Array.isArray(snap.records)&&snap.records.length>0){
-          let updatedCount=0;
-          const nowStr=new Date().toISOString();
-          await db.transaction('rw',db.records,db.metadata,async()=>{
-            for(const r of snap.records!){
-              if(r.kind==='settings')continue;
-              const current=await db.records.get([r.kind,r.id]);
-              const curTime=(current?.value as any)?.updatedAt||current?.updatedAt||'';
-              const newTime=(r.value as any)?.updatedAt||(r.value as any)?.createdAt||'';
-              if(!current||(newTime&&newTime>curTime)){
-                await db.records.put({
-                  kind:r.kind,
-                  id:r.id,
-                  branchId:r.branchId??null,
-                  value:r.value,
-                  createdAt:(r.value as any)?.createdAt||current?.createdAt||nowStr,
-                  updatedAt:(r.value as any)?.updatedAt||nowStr,
-                });
-                updatedCount++;
-              }
-            }
-            if(snap.settings&&typeof snap.settings==='object'){
-              const curSettings=(await db.metadata.get('settings'))?.value;
-              if(JSON.stringify(curSettings)!==JSON.stringify(snap.settings)){
-                await db.metadata.put({key:'settings',value:snap.settings});
-                updatedCount++;
-              }
-            }
-          });
-          if(updatedCount>0&&typeof window!=='undefined'){
-            window.dispatchEvent(new CustomEvent('local-workspace-change'));
-          }
-        }
-      }
-    }catch{/* Pull errors do not block local usage */}
   }catch(error){
     if(connection){const value=error as Error&{status?:number;code?:string};connection.lastError=value.message;
       if(value.status===401||value.status===403)connection.needsReconnect=true;

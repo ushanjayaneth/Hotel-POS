@@ -58,7 +58,7 @@ import {DeviceSetup,InitialDeviceRestore} from './components/DeviceSetup';
 import {syncLocalProductPhotos} from './lib/media';
 import {flushBeforeAppUpdate} from './lib/update-safety';
 import {sharedCloudSource} from './lib/cloud-shared';
-import {autoConnectDeviceToCloud,cloudRequest,rehydrateFromCloud,syncDeviceCloud} from './lib/cloud-sync';
+import {cloudRequest,syncDeviceCloud} from './lib/cloud-sync';
 import {requestDevicePersistence} from './lib/local/storage';
 import CloudMonitor from './components/CloudMonitor';
 import ConnectivityStatus from './components/ConnectivityStatus';
@@ -248,7 +248,7 @@ function Login({ onLogin,onSetup,onRestore,deviceInfo }: { onLogin: (user: User)
           {mode==='hub'&&<div className="device-login-option"><div className="login-divider">work on this device</div>{deviceInfo?<button type="button" className="button full-width" onClick={()=>setWorkspaceMode('device')}><Database size={15}/> Open saved device workspace</button>:<><button type="button" className="button full-width" onClick={onSetup}><Database size={15}/> Set up this device</button><button type="button" className="button button-ghost full-width" onClick={onRestore}>Restore device backup</button><p className="demo-caption">Keep your workspace on this device. No hosted backend required.</p></>}</div>}
           {mode==='device'&&<><p className="demo-caption">{deviceInfo?'Saved on this device · Setup complete':'Device data is unavailable. Restore your backup or create a new workspace.'}<br/><button type="button" className="button button-ghost button-small" onClick={()=>setWorkspaceMode('hub')}>Use branch hub instead</button></p>{!deviceInfo&&<div className="device-login-option"><button type="button" className="button full-width" onClick={onRestore}>Restore device backup</button><button type="button" className="button button-ghost full-width" onClick={onSetup}>Set up this device</button></div>}</>}
         </form>
-        <a className="button button-ghost" href="/?cloud=1"><Cloud size={14}/> Owner live view / shared cloud POS</a>
+        <a className="button button-ghost" href="/?cloud=1&restore=1"><Cloud size={14}/> Sign in & restore cloud workspace</a>
         <div className="login-bottom">
           <ShieldCheck size={12} /> Your session stays on this device.
         </div>
@@ -282,7 +282,7 @@ function WorkspaceApp() {
   useEffect(()=>{
     if(!deviceMode)return;
     let timer:ReturnType<typeof setTimeout>|undefined;
-    const upload=()=>{if(navigator.onLine!==false){void autoConnectDeviceToCloud().catch(()=>{});void syncDeviceCloud().catch(()=>{});}};
+    const upload=()=>{if(navigator.onLine!==false){void syncDeviceCloud().catch(()=>{});}};
     const change=()=>{clearTimeout(timer);timer=setTimeout(upload,1000);};
     upload();const interval=setInterval(upload,12000);
     window.addEventListener('online',upload);window.addEventListener('focus',upload);document.addEventListener('visibilitychange',upload);window.addEventListener('local-workspace-change',change);
@@ -312,6 +312,10 @@ function WorkspaceApp() {
     ((reload?: boolean) => Promise<void>) | null
   >(null);
   const requestGeneration = useRef(0);
+  const activeRefresh = useRef<{key:string;promise:Promise<void>}|null>(null);
+  const refreshIdentity = `${mode}:${sharedCloudSource()??''}:${user?.id??''}:${branchId}`;
+  const latestRefreshIdentity = useRef(refreshIdentity);
+  latestRefreshIdentity.current = refreshIdentity;
   const notify = useCallback(
     (message: string, type: "success" | "error" = "success") => {
       const id = Date.now() + Math.random();
@@ -427,15 +431,8 @@ function WorkspaceApp() {
     setStarting(true);setUser(null);setData(null);setLoadError('');
     setBranchId(uiStorage.getItem(sharedCloudSource()?`dh-cloud-branch:${sharedCloudSource()}`:deviceMode?'dh-device-branch':'dh-branch')||'b1');
     void (async()=>{
-      void requestDevicePersistence(true).catch(()=>{});
-      let info=await getLocalWorkspaceInfo().catch(()=>null);
-      if(!info&&navigator.onLine!==false){
-        const restored=await rehydrateFromCloud().catch(()=>false);
-        if(restored){
-          info=await getLocalWorkspaceInfo().catch(()=>null);
-          setWorkspaceMode('device');
-        }
-      }
+      void requestDevicePersistence().catch(()=>{});
+      const info=await getLocalWorkspaceInfo().catch(()=>null);
       if(!active)return null;
       setDeviceInfo(info);
       if(info&&!readSavedWorkspaceMode()&&!deviceMode){setWorkspaceMode('device');return null;}
@@ -463,15 +460,22 @@ function WorkspaceApp() {
       active = false;
     };
   }, [mode]);
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (afterChange=false) => {
     if (!user) return;
+    const identity = `${mode}:${sharedCloudSource()??''}:${user.id}:${branchId}`;
+    const pending = activeRefresh.current;
+    if(pending?.key===identity){
+      await pending.promise;
+      if(!afterChange||latestRefreshIdentity.current!==identity)return;
+    }
     const generation = ++requestGeneration.current;
     const cacheKey = sharedCloudSource()?`cloud:${sharedCloudSource()}:${user.id}:${branchId}`:`${user.id}:${branchId}`;
+    const request = (async()=>{
     try {
       const snapshot = await api<Snapshot>(
         `/bootstrap?branchId=${encodeURIComponent(branchId)}`,
       );
-      if (generation !== requestGeneration.current) return;
+      if (generation !== requestGeneration.current || latestRefreshIdentity.current!==identity) return;
       setData(snapshot);
       if(sharedCloudSource())uiStorage.setItem('dh-cloud-preferred-source',sharedCloudSource()!);
       setHubOnline(true);
@@ -484,7 +488,7 @@ function WorkspaceApp() {
         })
         .catch(() => {});
     } catch (err) {
-      if (generation !== requestGeneration.current) return;
+      if (generation !== requestGeneration.current || latestRefreshIdentity.current!==identity) return;
       setHubOnline(false);
       if (err instanceof ApiError && err.status === 401) {
         setUser(null);
@@ -504,9 +508,13 @@ function WorkspaceApp() {
       const cached = !deviceMode&&await browserDb.snapshots
         .get(cacheKey)
         .catch(() => undefined);
+      if (generation !== requestGeneration.current || latestRefreshIdentity.current!==identity) return;
       if (cached) setData(cached.data);
       else setLoadError((err as Error).message);
     }
+    })();
+    activeRefresh.current={key:identity,promise:request};
+    try{await request;}finally{if(activeRefresh.current?.promise===request)activeRefresh.current=null;}
   }, [user, branchId,mode]);
   useEffect(() => {
     void refresh();
@@ -533,7 +541,7 @@ function WorkspaceApp() {
   const mutate = useCallback(
     async <T,>(path: string, body?: unknown, method?: string): Promise<T> => {
       localWrites.current++;
-      try{const result = await api<T>(path, body, method);await refresh();return result;}
+      try{const result = await api<T>(path, body, method);await refresh(true);return result;}
       finally{localWrites.current--;}
     },
     [refresh],
@@ -590,6 +598,7 @@ function WorkspaceApp() {
   }
   if (starting) return <Spinner />;
   if (!user&&sharedCloudSource())return <CloudMonitor sharedSource={sharedCloudSource()!}/>;
+  if(!user&&sharedCloudSource())return <CloudMonitor sharedSource={sharedCloudSource()!}/>;
   if (!user) return <><Login onLogin={onLogin} onSetup={()=>setDeviceSetup(true)} onRestore={()=>setDeviceRestore(true)} deviceInfo={deviceInfo}/>{deviceSetup&&<DeviceSetup onClose={()=>setDeviceSetup(false)} onComplete={(next)=>{setDeviceSetup(false);setBranchId('b1');setUser(next);uiStorage.setItem('dh-device-last-user',JSON.stringify(next));void getLocalWorkspaceInfo().then(setDeviceInfo);}}/>}{deviceRestore&&<InitialDeviceRestore onClose={()=>setDeviceRestore(false)}/>}</>;
   if (!data || data.branch.id !== branchId) {
     if (loadError)
@@ -668,7 +677,7 @@ function WorkspaceApp() {
             <div className="hub-status">
               <i className={`status-dot ${!hubOnline ? "offline" : ""}`} />
               <span>
-                {deviceMode?'Device database ready':hubOnline ? "Branch hub connected" : "Hub unavailable"}
+                {sharedCloudSource()?(hubOnline?'Shared cloud connected':'Cloud unavailable'):deviceMode?'Device database ready':hubOnline ? "Branch hub connected" : "Hub unavailable"}
               </span>
             </div>
             <div className="user-card">
@@ -894,12 +903,27 @@ function SharedCloudGate(){
   return ready?<NavigationProvider><WorkspaceApp/></NavigationProvider>:<CloudMonitor sharedSource={sharedCloudSource()!}/>;
 }
 function PreferredCloudRedirect({source}:{source:string}){useEffect(()=>{location.replace(`/?shared=${encodeURIComponent(source)}`);},[source]);return <Spinner label="Opening your shared workspace"/>;}
+function AutomaticCloudEntry(){
+  const [configured,setConfigured]=useState<boolean|null>(null);
+  useEffect(()=>{
+    let active=true;
+    const remembered=uiStorage.getItem('dh-cloud-configured')==='1';
+    if(navigator.onLine===false){setConfigured(remembered);return;}
+    void cloudRequest<{configured:boolean}>('status').then(value=>{
+      if(value.configured)uiStorage.setItem('dh-cloud-configured','1');
+      if(active)setConfigured(value.configured||remembered);
+    }).catch(()=>{if(active)setConfigured(remembered);});
+    return()=>{active=false;};
+  },[]);
+  if(configured===null)return <Spinner label="Opening restaurant workspace"/>;
+  return configured?<CloudMonitor automatic restore/>:<NavigationProvider><WorkspaceApp/></NavigationProvider>;
+}
 export default function App(){
   const params=new URLSearchParams(location.search);
   useEffect(()=>{if(params.has('local'))uiStorage.removeItem('dh-cloud-preferred-source');},[]);
   if(sharedCloudSource())return <SharedCloudGate/>;
-  if(params.has('cloud'))return <CloudMonitor/>;
+  if(params.has('cloud'))return <CloudMonitor restore={params.has('restore')}/>;
   const preferred=params.has('local')?null:uiStorage.getItem('dh-cloud-preferred-source');
   if(preferred&&/^[A-Za-z0-9_-]{1,160}$/.test(preferred))return <PreferredCloudRedirect source={preferred}/>;
-  return <NavigationProvider><WorkspaceApp/></NavigationProvider>;
+  return params.has('local')?<NavigationProvider><WorkspaceApp/></NavigationProvider>:<AutomaticCloudEntry/>;
 }

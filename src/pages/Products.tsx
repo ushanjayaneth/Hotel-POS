@@ -27,7 +27,9 @@ import { isProductImageReference } from "../../shared/media";
 import { productStockState } from "../../shared/stock";
 import PhotoPicker from "../components/PhotoPicker";
 import ProductPhoto from "../components/ProductPhoto";
+import {focusDialog, restoreDialogFocus, useDialogViewport, useBodyScrollLock} from "../components/ui";
 import "../styles/products.css";
+import {createPortal} from 'react-dom';
 
 type Product = MenuItem & {
   barcode?: string;
@@ -53,6 +55,8 @@ function Dialog({
   const dialogRef = useRef<HTMLElement>(null);
   closeRef.current = onClose;
   busyRef.current = busy;
+  useDialogViewport(dialogRef);
+  useBodyScrollLock();
   useBackLayer(
     true,
     () => {
@@ -65,8 +69,7 @@ function Dialog({
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     const dialog = dialogRef.current;
-    const input = dialog?.querySelector<HTMLElement>("input,select");
-    input?.focus();
+    focusDialog(dialog);
     const handleKey = (event: KeyboardEvent) => {
       const dialogs = document.querySelectorAll(".product-dialog");
       if (dialogs[dialogs.length - 1] !== dialog) return;
@@ -94,11 +97,11 @@ function Dialog({
     document.addEventListener("keydown", handleKey);
     return () => {
       document.removeEventListener("keydown", handleKey);
-      previous?.focus();
+      restoreDialogFocus(previous);
     };
   }, []);
 
-  return (
+  return createPortal(
     <div
       className="modal-backdrop"
       onMouseDown={(event) => {
@@ -111,6 +114,7 @@ function Dialog({
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        tabIndex={-1}
       >
         <header className="product-dialog-header">
           <div>
@@ -129,7 +133,7 @@ function Dialog({
         </header>
         {children}
       </section>
-    </div>
+    </div>, document.body
   );
 }
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { ArchiveRestore, Check, Database, Download, HardDrive, LoaderCircle, RefreshCw, ShieldCheck, Smartphone, Upload } from 'lucide-react';
 import { usePOS } from '../lib/context';
 import { isDeviceWorkspace, useWorkspaceMode } from '../lib/workspace-mode';
+import { sharedCloudSource } from '../lib/cloud-shared';
 import { deviceStorageStatus, requestDevicePersistence, storageBytes, type DeviceStorageStatus } from '../lib/local/storage';
 import { createEncryptedBackup, downloadBackupFile, inspectEncryptedBackup, markBackupDownloaded, restoreDeviceBackup } from '../lib/local/backup';
 import { Modal } from './ui';
@@ -32,11 +33,12 @@ type InspectedBackup = Awaited<ReturnType<typeof inspectEncryptedBackup>>;
 
 export function DeviceStorage() {
   useWorkspaceMode();
-  return isDeviceWorkspace() ? <DeviceStoragePanel /> : null;
+  const sharedSource=sharedCloudSource();
+  return isDeviceWorkspace()||sharedSource ? <DeviceStoragePanel sharedSource={sharedSource} /> : null;
 }
 export default DeviceStorage;
 
-function DeviceStoragePanel() {
+function DeviceStoragePanel({sharedSource}:{sharedSource:string|null}) {
   const { data, notify } = usePOS();
   const [status, setStatus] = useState<DeviceStorageStatus | null>(null);
   const [statusError, setStatusError] = useState('');
@@ -161,24 +163,24 @@ function DeviceStoragePanel() {
   return <section className="panel preference-card device-storage" aria-label="Device storage and backups">
     <div className="preference-heading">
       <div className="preference-icon"><HardDrive size={20} /></div>
-      <div><h2>Device storage & backups</h2><p>Your workspace is saved in this browser on this device.</p></div>
-      <span className="badge">Device-only workspace</span>
+      <div><h2>Device storage & backups</h2><p>{sharedSource?'This device caches app data and unfinished drafts. Confirmed transactions are saved in the shared cloud workspace.':'Your workspace is saved in this browser on this device.'}</p></div>
+      <span className="badge">{sharedSource?'Shared cloud workspace':'Device workspace'}</span>
     </div>
-    <div className="storage-scope-note"><Database size={16} /><p>Other devices are not automatically synchronized. Export an encrypted backup to keep a copy outside this browser.</p></div>
+    <div className="storage-scope-note"><Database size={16} /><p>{sharedSource?'Use the same shared workspace on every device. After losing browser data, sign in with the cloud owner account and open the saved workspace to download confirmed cloud records. Unsaved drafts cannot be recovered from the cloud.':'This is an independent local workspace. Settings → Cloud connection can upload a copy for owner viewing; a shared cloud workspace is required for several online devices to use the same stock. Keep an encrypted backup outside this browser.'}</p></div>
     <div className="storage-meter-heading"><span>Browser storage for this website</span><button type="button" className="icon-button" aria-label="Refresh device storage" onClick={() => void refreshStorage()} disabled={refreshing}><RefreshCw size={14} className={refreshing ? 'spin' : ''} /></button></div>
     <div className="storage-meter-values"><strong>{status ? storageBytes(status.usage) : 'Checking storage…'}</strong><span>{status?.quota !== null && status?.quota !== undefined ? `of ${storageBytes(status.quota)} browser quota` : 'Browser quota not reported'}</span></div>
     {percent !== null && <div className={`storage-meter ${almostFull ? 'storage-meter-high' : ''}`} role="progressbar" aria-label="Browser storage used" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent)}><span style={{width:`${percent}%`}} /></div>}
     {almostFull && <p className="storage-quota-note">Browser storage is nearly full. Save a backup and make room on this device for new transactions.</p>}
     <div className="storage-facts">
-      <div><span>Saved records</span><strong>{status ? status.records.toLocaleString('en-GB') : '—'}</strong></div>
-      <div><span>Journal entries</span><strong>{status ? status.journal.toLocaleString('en-GB') : '—'}</strong></div>
+      {!sharedSource&&<div><span>Saved records</span><strong>{status ? status.records.toLocaleString('en-GB') : '—'}</strong></div>}
+      {!sharedSource&&<div><span>Journal entries</span><strong>{status ? status.journal.toLocaleString('en-GB') : '—'}</strong></div>}
       <div><span>Persistent storage</span><strong className={status?.persistent ? 'storage-positive' : ''}>{status ? status.persistent ? 'Allowed' : 'Not granted' : 'Checking…'}</strong></div>
-      <div><span>Last backup download requested</span><strong>{status?.lastBackup ? dateLabel(status.lastBackup) : 'No backup recorded'}</strong>{status?.lastBackup ? <small>{status.lastBackupRecords.toLocaleString('en-GB')} records included</small> : null}</div>
+      {sharedSource?<div><span>Recovery account</span><strong>Cloud owner sign-in</strong><small>Open the same saved workspace after signing in.</small></div>:<div><span>Last backup download requested</span><strong>{status?.lastBackup ? dateLabel(status.lastBackup) : 'No backup recorded'}</strong>{status?.lastBackup ? <small>{status.lastBackupRecords.toLocaleString('en-GB')} records included</small> : null}</div>}
     </div>
     <div className="storage-persistence"><div><ShieldCheck size={17} /><p>{status?.persistent ? 'This browser has granted persistent storage. Keep an external backup for recovery.' : 'Persistent storage helps protect this workspace from automatic browser eviction.'}</p></div>{!status?.persistent && <button type="button" className="button button-small" onClick={() => void persist()} disabled={persisting || !persistenceSupported || !status?.available}>{persisting ? <LoaderCircle size={14} className="spin" /> : <ShieldCheck size={14} />}{persistenceSupported ? 'Request persistent storage' : 'Not supported by this browser'}</button>}</div>
     {(statusError || status && !status.available) && <div className="error-message" role="alert">{statusError || 'This browser’s workspace storage could not be opened. Keep the app open and try refreshing the storage information.'}</div>}
-    <p className="storage-footnote">Usage includes this website’s cached app and saved data. The available quota is set by your browser. Clearing site data removes this device’s workspace.</p>
-    {owner ? <div className="storage-backup-actions"><button type="button" className="button button-primary" onClick={() => openDialog('export')} disabled={!status?.available}><Download size={15} /> Export encrypted backup</button><button type="button" className="button" onClick={() => openDialog('restore')} disabled={!status?.available}><ArchiveRestore size={15} /> Restore backup</button></div> : <p className="storage-owner-note">Ask the workspace owner to export or restore an encrypted backup.</p>}
+    <p className="storage-footnote">Usage includes this website’s cached app and saved data. The browser sets the available quota. Persistent storage protects against automatic eviction; it does not prevent deliberate site-data clearing, formatting or device loss. Installing the PWA does not provide that protection either.</p>
+    {sharedSource?<p className="storage-owner-note">Local .hotelbackup export and replacement apply to the original device workspace, not this shared cloud workspace. Keep the original encrypted backup and a separate cloud recovery plan.</p>:owner ? <div className="storage-backup-actions"><button type="button" className="button button-primary" onClick={() => openDialog('export')} disabled={!status?.available}><Download size={15} /> Export encrypted backup</button><button type="button" className="button" onClick={() => openDialog('restore')} disabled={!status?.available}><ArchiveRestore size={15} /> Restore backup</button></div> : <p className="storage-owner-note">Ask the workspace owner to export or restore an encrypted backup.</p>}
     <div className="storage-install"><Smartphone size={20} /><div><strong>{installed ? 'App installed' : 'Open this workspace as an app'}</strong><p>{installed ? 'Launch the installed app from this device’s home screen or app list.' : canInstall ? 'Install the app for a dedicated window and quick access from this device.' : 'Use your browser’s Install app or Add to Home Screen option. In Safari, open Share, then Add to Home Screen.'}</p></div>{!installed && canInstall && <button type="button" className="button button-small" onClick={() => void install()} disabled={installing}><Download size={14} />{installing ? 'Installing…' : 'Install app'}</button>}{installed && <Check size={18} className="storage-positive" />}</div>
 
     {dialog === 'export' && <Modal title="Export encrypted backup" subtitle="Save a password-protected copy of this device’s workspace." onClose={closeDialog}>

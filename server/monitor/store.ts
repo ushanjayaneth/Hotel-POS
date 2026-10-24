@@ -56,7 +56,7 @@ export class FirebaseMonitorStore implements MonitorStore {
       updatedAt: source.updatedAt,
       lastSeenAt: source.lastSeenAt,
       revoked: Boolean(source.revoked),
-      shared: Boolean(source.shared ?? true),
+      shared: Boolean(source.shared),
       dataVersion: Number(source.dataVersion ?? 0)
     };
     await this.root().child(`index/${source.sourceId}`).transaction(current => {
@@ -65,7 +65,7 @@ export class FirebaseMonitorStore implements MonitorStore {
       return {
         ...base,
         lastSeenAt,
-        shared: Boolean(base.shared ?? true),
+        shared: Boolean(base.shared),
         dataVersion: Number(base.dataVersion ?? 0)
       };
     }, undefined, false);
@@ -80,16 +80,26 @@ export class FirebaseMonitorStore implements MonitorStore {
   }
   async replace(id: string, expected: number | null, next: Projection) {
     next.source.dataVersion = Number(next.source.dataVersion ?? 0);
-    next.source.shared = Boolean(next.source.shared ?? true);
-    const result = await this.root().child(`sources/${id}`).transaction(current => {
-      if ((current?.revision ?? null) !== expected) return undefined;
-      // JSON preserves empty arrays and null fields that RTDB would otherwise prune.
-      return { revision: next.revision, json: JSON.stringify(next) };
-    }, undefined, false);
-    if (!result.committed) return false;
-    // A replay repairs this small index after an interrupted acknowledgement.
-    await this.publish(next.source);
-    return true;
+    next.source.shared = Boolean(next.source.shared);
+    const reference = this.root().child(`sources/${id}`);
+    const retainValue = () => {};
+    // A one-shot get() does not retain the SDK cache. A cold transaction would
+    // otherwise see null and abort before it ever compares the server revision.
+    reference.on('value', retainValue);
+    try {
+      await reference.once('value');
+      const result = await reference.transaction(current => {
+        if ((current?.revision ?? null) !== expected) return undefined;
+        // JSON preserves empty arrays and null fields that RTDB would otherwise prune.
+        return { revision: next.revision, json: JSON.stringify(next) };
+      }, undefined, false);
+      if (!result.committed) return false;
+      // A replay repairs this small index after an interrupted acknowledgement.
+      await this.publish(next.source);
+      return true;
+    } finally {
+      reference.off('value', retainValue);
+    }
   }
   async rate(key: string, limit: number, windowMs: number) {
     const now = Date.now();
@@ -102,30 +112,29 @@ export class FirebaseMonitorStore implements MonitorStore {
 }
 
 export function parseServiceAccount(raw: string): any {
-  let text = String(raw).trim();
-  if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
-    try { text = JSON.parse(text); } catch {}
-  }
-  if (!text.startsWith('{')) {
-    try {
-      const decoded = Buffer.from(text, 'base64').toString('utf8');
-      if (decoded.trim().startsWith('{')) text = decoded.trim();
-    } catch {}
-  }
-  let parsed: any;
+  const text = String(raw).trim();
+  let parsed: unknown;
   try {
     parsed = JSON.parse(text);
-  } catch (err) {
+  } catch {
     try {
-      parsed = Function(`return (${text})`)();
-    } catch (funcErr: any) {
-      throw new Error(`Service account parse failed. JSON: ${(err as Error).message}. JS: ${funcErr?.message}. Prefix: ${JSON.stringify(text.slice(0, 40))}`);
+      if (!/^[A-Za-z0-9+/=\s]+$/.test(text)) throw new Error('Invalid encoding.');
+      parsed = JSON.parse(Buffer.from(text, 'base64').toString('utf8'));
+    } catch {
+      throw new Error('Firebase service account configuration must contain valid JSON or base64-encoded JSON.');
     }
   }
-  if (parsed && typeof parsed.private_key === 'string') {
-    parsed.private_key = parsed.private_key.replace(/\\n/g, '\n');
+  // Some environment-variable tools JSON-encode the whole JSON document once.
+  if (typeof parsed === 'string') {
+    try { parsed = JSON.parse(parsed); }
+    catch { throw new Error('Firebase service account configuration must contain valid JSON.'); }
   }
-  return parsed;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Firebase service account configuration is invalid.');
+  const account = parsed as Record<string, unknown>;
+  if (!['project_id', 'client_email', 'private_key'].every(field => typeof account[field] === 'string' && String(account[field]).trim())) {
+    throw new Error('Firebase service account configuration is incomplete.');
+  }
+  return {...account, private_key: String(account.private_key).replace(/\\n/g, '\n')};
 }
 
 let cached: { key: string; store: MonitorStore } | undefined;
