@@ -5,7 +5,7 @@ test.setTimeout(120_000);
 async function setup(page: Page) {
   // An isolated device workspace: this test never connects to a shop's cloud.
   await page.route('**/api/**', route => route.fulfill({status: 404, body: 'NOT_FOUND'}));
-  await page.goto('/');
+  await page.goto('/?local=1');
   await page.getByRole('button', {name: 'Set up this device', exact: true}).click();
   const setup = page.getByRole('dialog', {name: 'Set up this device', exact: true});
   await setup.getByLabel(/^Owner PIN/).fill('98765432');

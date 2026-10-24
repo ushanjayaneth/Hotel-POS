@@ -1,10 +1,10 @@
 import {useEffect,useState} from 'react';
-import {getCloudSyncState,type CloudSyncState} from '../lib/cloud-sync';
+import {getCloudSyncState,getLastCloudContact,type CloudSyncState} from '../lib/cloud-sync';
 import {sharedCloudSource} from '../lib/cloud-shared';
 import '../styles/cloud-monitor.css';
 
 export default function ConnectivityStatus(){
-  const [online,setOnline]=useState(navigator.onLine),[state,setState]=useState<CloudSyncState|null>(null),[contact,setContact]=useState(0),[clock,setClock]=useState(Date.now());
+  const [online,setOnline]=useState(navigator.onLine),[state,setState]=useState<CloudSyncState|null>(null),[contact,setContact]=useState(getLastCloudContact),[clock,setClock]=useState(Date.now());
   const shared=Boolean(sharedCloudSource());
   useEffect(()=>{
     const net=()=>setOnline(navigator.onLine);

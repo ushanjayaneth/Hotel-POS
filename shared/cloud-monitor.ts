@@ -18,7 +18,7 @@ export interface CloudSource {
   shared?: boolean;
   dataVersion?:number;
 }
-export interface CloudStatus {configured: boolean; missing: string[]}
+export interface CloudStatus {configured: boolean; missing: string[]; posPinConfigured?:boolean}
 export interface CloudEnrollment {sourceId: string; businessName: string; deviceName: string; workspaceId: string}
 export interface CloudEnrollmentResult {token: string; sourceId: string; epoch: string}
 export interface CloudPush {sourceId: string; epoch: string; sequence: number; eventId: string; ready: boolean; changes: CloudChange[]}

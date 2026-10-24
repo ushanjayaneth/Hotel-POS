@@ -15,12 +15,14 @@ export interface CloudSyncState {
   lastUploadedAt:string|null;lastSeenAt:string|null;lastError:string;needsReconnect:boolean;shared?:boolean;
 }
 interface Options {db?:LocalDatabase;fetch?:typeof fetch}
+let lastCloudContact=0;
+export const getLastCloudContact=()=>lastCloudContact;
 const changed=()=>{if(typeof window!=='undefined')window.dispatchEvent(new Event('cloud-monitor-change'));};
 export async function cloudRequest<T>(action:string,body?:unknown,options:RequestInit={}):Promise<T>{
   let response:Response;
   try{response=await fetch(`/api/cloud?action=${action}`,{credentials:'same-origin',...options,method:body===undefined?'GET':'POST',headers:{...(body===undefined?{}:{'Content-Type':'application/json'}),...options.headers},body:body===undefined?undefined:JSON.stringify(body),signal:options.signal??AbortSignal.timeout(20000)});}catch(error){if(typeof window!=='undefined')window.dispatchEvent(new Event('cloud-failure'));throw error;}
   const result=await response.json().catch(()=>({error:'The cloud service returned an invalid response.'}));
-  if(!response.ok){if(typeof window!=='undefined')window.dispatchEvent(new Event('cloud-failure'));throw Object.assign(new Error(result.error??'Cloud request failed.'),{status:response.status,code:result.code});}if(typeof window!=='undefined')window.dispatchEvent(new Event('cloud-contact'));return result as T;
+  if(!response.ok){lastCloudContact=0;if(typeof window!=='undefined')window.dispatchEvent(new Event('cloud-failure'));throw Object.assign(new Error(result.error??'Cloud request failed.'),{status:response.status,code:result.code});}lastCloudContact=Date.now();if(typeof window!=='undefined')window.dispatchEvent(new Event('cloud-contact'));return result as T;
 }
 function sanitize(value:unknown):unknown {
   if(Array.isArray(value))return value.map(sanitize);
@@ -43,9 +45,9 @@ export async function getCloudSyncState(db:LocalDatabase=localDb):Promise<CloudS
   const {token:_,epoch:__,baseline,...publicState}=value;
   return {...publicState,linked:true,pending:(baseline?baseline.chunks.length-baseline.index:0)+Math.max(0,journalSequence-(baseline?.cursor??value.cursor))};
 }
-async function ownerSessionPair(deviceName:string,options:Options={},replaceObsolete=false):Promise<CloudSyncState>{
+async function ownerSessionPair(deviceName:string,options:Options={},replaceObsolete=false,posAuthorized=false):Promise<CloudSyncState>{
   const db=options.db??localDb,request=options.fetch??fetch;
-  if((await getLocalUser(db))?.role!=='owner')throw new Error('Open the original device copy and sign in as its owner before transferring saved local records.');
+  if(!posAuthorized&&(await getLocalUser(db))?.role!=='owner')throw new Error('Sign in to your POS before transferring saved local records.');
   if(!replaceObsolete&&await db.metadata.get(key))throw new Error('Disconnect the existing cloud connection first.');
   const info=await getLocalWorkspaceInfo(db);if(!info)throw new Error('Set up this device first.');
   const sourceId=`source-${crypto.randomUUID()}`;
@@ -77,9 +79,28 @@ export async function connectDeviceToCloud(input:{email:string;password:string;d
 export async function openAutomaticCloudWorkspace(options:Options={}):Promise<string|null>{
   const db=options.db??localDb,request=options.fetch??fetch;
   type Result={sourceId:string|null;empty?:boolean;selectionRequired?:boolean};
+  // A single server-verified POS login authorizes both the shared workspace and
+  // this device's first import. An expired local PIN session needs no second login.
+  const session=await cloudRequestWith(request,'pos-session') as {authenticated:boolean};
+  if(!session.authenticated)throw Object.assign(new Error('Sign in with your staff PIN.'),{status:401});
   // Finish this device's already-authorized journal before a monitoring-only
   // source changes to shared authority. Promotion must not strand its last sales.
-  const before=await getCloudSyncState(db);
+  let before=await getCloudSyncState(db);
+  if(before&&!before.shared){
+    const connection=(await db.metadata.get(key))!.value as Connection;
+    const info=await getLocalWorkspaceInfo(db);
+    if(info){
+      try{
+        const renewed=await cloudRequestWith(request,'refresh-device',{sourceId:connection.sourceId,workspaceId:info.workspaceId}) as CloudEnrollmentResult;
+        await db.metadata.put({key,value:{...connection,...renewed,needsReconnect:false,lastError:''}});
+        before=await getCloudSyncState(db);
+      }catch(error){
+        if((error as {code?:string}).code!=='SHARED_WORKSPACE')throw error;
+        await db.metadata.put({key,value:{...connection,shared:true,needsReconnect:false,lastError:''}});
+        before=await getCloudSyncState(db);
+      }
+    }
+  }
   if(before&&!before.shared&&!before.needsReconnect&&before.pending){
     const uploaded=await syncDeviceCloud(options);
     if(uploaded?.lastError&&!uploaded.shared)throw new Error(uploaded.lastError);
@@ -98,11 +119,10 @@ export async function openAutomaticCloudWorkspace(options:Options={}):Promise<st
   }
   const info=await getLocalWorkspaceInfo(db);
   if(result.empty&&info){
-    if((await getLocalUser(db))?.role!=='owner')throw new Error('Your earlier local records are still on this device. Open the original device copy and sign in as its owner to transfer them.');
     let state=await getCloudSyncState(db);
-    if(!state||state.needsReconnect||state.shared)state=await ownerSessionPair('Original shop device',options,true);
+    if(!state||state.needsReconnect||state.shared)state=await ownerSessionPair('Original shop device',options,true,true);
     state=await syncDeviceCloud(options);
-    if(state?.needsReconnect){await ownerSessionPair('Original shop device',options,true);state=await syncDeviceCloud(options);}
+    if(state?.needsReconnect){await ownerSessionPair('Original shop device',options,true,true);state=await syncDeviceCloud(options);}
     if(!state||state.lastError||state.pending)throw new Error(state?.lastError||'The original device upload is still in progress. Keep this app open and retry.');
     result=await cloudRequestWith(request,'workspace',{create:false}) as Result;
   }else if(result.empty){result=await cloudRequestWith(request,'workspace',{create:true}) as Result;}

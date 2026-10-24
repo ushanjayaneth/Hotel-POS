@@ -9,7 +9,6 @@ import {
   ChevronRight,
   ClipboardList,
   CookingPot,
-  Cloud,
   Flame,
   Grid2X2,
   History,
@@ -58,9 +57,8 @@ import {DeviceSetup,InitialDeviceRestore} from './components/DeviceSetup';
 import {syncLocalProductPhotos} from './lib/media';
 import {flushBeforeAppUpdate} from './lib/update-safety';
 import {sharedCloudSource} from './lib/cloud-shared';
-import {cloudRequest,syncDeviceCloud} from './lib/cloud-sync';
+import {cloudRequest,openAutomaticCloudWorkspace,syncDeviceCloud} from './lib/cloud-sync';
 import {requestDevicePersistence} from './lib/local/storage';
-import CloudMonitor from './components/CloudMonitor';
 import ConnectivityStatus from './components/ConnectivityStatus';
 
 // Optional UI preferences must never block access to committed business records.
@@ -132,7 +130,7 @@ function Brand() {
   );
 }
 
-function Login({ onLogin,onSetup,onRestore,deviceInfo }: { onLogin: (user: User) => void;onSetup:()=>void;onRestore:()=>void;deviceInfo:LocalWorkspaceInfo|null }) {
+function Login({ onLogin,onSetup,onRestore,deviceInfo=null,cloudLogin }: { onLogin?: (user: User) => void;onSetup?:()=>void;onRestore?:()=>void;deviceInfo?:LocalWorkspaceInfo|null;cloudLogin?:(pin:string)=>Promise<void> }) {
   const mode=useWorkspaceMode();
   const [pin, setPin] = useState("");
   const [busy, setBusy] = useState(false);
@@ -141,8 +139,9 @@ function Login({ onLogin,onSetup,onRestore,deviceInfo }: { onLogin: (user: User)
     setBusy(true);
     setError("");
     try {
+      if(cloudLogin){await cloudLogin(value);return;}
       const result = await api<{ user: User }>("/login", { pin: value });
-      onLogin(result.user);
+      onLogin?.(result.user);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -171,7 +170,7 @@ function Login({ onLogin,onSetup,onRestore,deviceInfo }: { onLogin: (user: User)
           </p>
           <div className="login-badges">
             <span>
-              <WifiOff size={14} /> Works without internet
+              {cloudLogin?<><Wifi size={14} /> Your shop, connected</>:<><WifiOff size={14} /> Works without internet</>}
             </span>
             <span>
               <MonitorSmartphone size={14} /> Made for every screen
@@ -179,7 +178,7 @@ function Login({ onLogin,onSetup,onRestore,deviceInfo }: { onLogin: (user: User)
           </div>
         </div>
         <div className="login-footer">
-          <ShieldCheck size={14} /> Stored at your branch. Synced on your terms.
+          <ShieldCheck size={14} /> {cloudLogin?'One shop. The same data on every device.':'Stored at your branch. Synced on your terms.'}
         </div>
         <div className="login-orb" />
       </section>
@@ -196,7 +195,7 @@ function Login({ onLogin,onSetup,onRestore,deviceInfo }: { onLogin: (user: User)
           </div>
           <div className="eyebrow">YOUR RESTAURANT, CONNECTED</div>
           <h2>Welcome back.</h2>
-          <p>{mode==='device'?'Enter your private staff PIN to open this device’s saved workspace.':'Enter your staff PIN to open your workspace.'}</p>
+          <p>{cloudLogin?'Enter your staff PIN. Your shop data opens automatically.':mode==='device'?'Enter your private staff PIN to open this device’s saved workspace.':'Enter your staff PIN to open your workspace.'}</p>
           {error && (
             <div className="error-message" role="alert">
               {error}
@@ -208,11 +207,11 @@ function Login({ onLogin,onSetup,onRestore,deviceInfo }: { onLogin: (user: User)
               className="input pin-input"
               type="password"
               inputMode="numeric"
-              pattern="[0-9]{4,12}"
+              pattern={cloudLogin?'[0-9]{6,16}':'[0-9]{4,12}'}
               autoComplete="current-password"
               required
-              minLength={4}
-              maxLength={12}
+              minLength={cloudLogin?6:4}
+              maxLength={cloudLogin?16:12}
               value={pin}
               onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))}
               placeholder="••••"
@@ -231,7 +230,7 @@ function Login({ onLogin,onSetup,onRestore,deviceInfo }: { onLogin: (user: User)
               </>
             )}
           </button>
-          {mode==='hub' && <><div className="login-divider">just looking around?</div>
+          {!cloudLogin&&mode==='hub' && <><div className="login-divider">just looking around?</div>
           <button
             className="button demo-login"
             type="button"
@@ -245,10 +244,9 @@ function Login({ onLogin,onSetup,onRestore,deviceInfo }: { onLogin: (user: User)
             <br />
             Demo owner PIN: 1234
           </p></>}
-          {mode==='hub'&&<div className="device-login-option"><div className="login-divider">work on this device</div>{deviceInfo?<button type="button" className="button full-width" onClick={()=>setWorkspaceMode('device')}><Database size={15}/> Open saved device workspace</button>:<><button type="button" className="button full-width" onClick={onSetup}><Database size={15}/> Set up this device</button><button type="button" className="button button-ghost full-width" onClick={onRestore}>Restore device backup</button><p className="demo-caption">Keep your workspace on this device. No hosted backend required.</p></>}</div>}
-          {mode==='device'&&<><p className="demo-caption">{deviceInfo?'Saved on this device · Setup complete':'Device data is unavailable. Restore your backup or create a new workspace.'}<br/><button type="button" className="button button-ghost button-small" onClick={()=>setWorkspaceMode('hub')}>Use branch hub instead</button></p>{!deviceInfo&&<div className="device-login-option"><button type="button" className="button full-width" onClick={onRestore}>Restore device backup</button><button type="button" className="button button-ghost full-width" onClick={onSetup}>Set up this device</button></div>}</>}
+          {!cloudLogin&&mode==='hub'&&<div className="device-login-option"><div className="login-divider">work on this device</div>{deviceInfo?<button type="button" className="button full-width" onClick={()=>setWorkspaceMode('device')}><Database size={15}/> Open saved device workspace</button>:<><button type="button" className="button full-width" onClick={onSetup}><Database size={15}/> Set up this device</button><button type="button" className="button button-ghost full-width" onClick={onRestore}>Restore device backup</button><p className="demo-caption">Keep your workspace on this device. No hosted backend required.</p></>}</div>}
+          {!cloudLogin&&mode==='device'&&<><p className="demo-caption">{deviceInfo?'Saved on this device · Setup complete':'Device data is unavailable. Restore your backup or create a new workspace.'}<br/><button type="button" className="button button-ghost button-small" onClick={()=>setWorkspaceMode('hub')}>Use branch hub instead</button></p>{!deviceInfo&&<div className="device-login-option"><button type="button" className="button full-width" onClick={onRestore}>Restore device backup</button><button type="button" className="button button-ghost full-width" onClick={onSetup}>Set up this device</button></div>}</>}
         </form>
-        <a className="button button-ghost" href="/?cloud=1&restore=1"><Cloud size={14}/> Sign in & restore cloud workspace</a>
         <div className="login-bottom">
           <ShieldCheck size={12} /> Your session stays on this device.
         </div>
@@ -435,7 +433,7 @@ function WorkspaceApp() {
       const info=await getLocalWorkspaceInfo().catch(()=>null);
       if(!active)return null;
       setDeviceInfo(info);
-      if(info&&!readSavedWorkspaceMode()&&!deviceMode){setWorkspaceMode('device');return null;}
+      if(info&&!sharedCloudSource()&&!readSavedWorkspaceMode()&&!deviceMode){setWorkspaceMode('device');return null;}
       if(deviceMode)await recoverRestoredDrafts();
       return api<{user:User|null}>('/session');
     })()
@@ -448,7 +446,7 @@ function WorkspaceApp() {
       .catch(() => {
         if(!active)return;
         try {
-          const saved = !deviceMode&&uiStorage.getItem("dh-last-user");
+          const saved = !deviceMode&&!sharedCloudSource()&&uiStorage.getItem("dh-last-user");
           if (saved) setUser(JSON.parse(saved));
           setHubOnline(false);
         } catch {
@@ -597,8 +595,7 @@ function WorkspaceApp() {
     setStarting(false);
   }
   if (starting) return <Spinner />;
-  if (!user&&sharedCloudSource())return <CloudMonitor sharedSource={sharedCloudSource()!}/>;
-  if(!user&&sharedCloudSource())return <CloudMonitor sharedSource={sharedCloudSource()!}/>;
+  if (!user&&sharedCloudSource())return <CloudPOSEntry source={sharedCloudSource()!}/>;
   if (!user) return <><Login onLogin={onLogin} onSetup={()=>setDeviceSetup(true)} onRestore={()=>setDeviceRestore(true)} deviceInfo={deviceInfo}/>{deviceSetup&&<DeviceSetup onClose={()=>setDeviceSetup(false)} onComplete={(next)=>{setDeviceSetup(false);setBranchId('b1');setUser(next);uiStorage.setItem('dh-device-last-user',JSON.stringify(next));void getLocalWorkspaceInfo().then(setDeviceInfo);}}/>}{deviceRestore&&<InitialDeviceRestore onClose={()=>setDeviceRestore(false)}/>}</>;
   if (!data || data.branch.id !== branchId) {
     if (loadError)
@@ -896,34 +893,82 @@ function WorkspaceApp() {
   );
 }
 
-function SharedCloudGate(){
-  const [ready,setReady]=useState<boolean|null>(null);
-  useEffect(()=>{void cloudRequest<{authenticated:boolean}>('session').then(value=>setReady(value.authenticated)).catch(()=>setReady(false));},[]);
-  if(ready===null)return <Spinner label="Connecting to shared cloud POS"/>;
-  return ready?<NavigationProvider><WorkspaceApp/></NavigationProvider>:<CloudMonitor sharedSource={sharedCloudSource()!}/>;
-}
-function PreferredCloudRedirect({source}:{source:string}){useEffect(()=>{location.replace(`/?shared=${encodeURIComponent(source)}`);},[source]);return <Spinner label="Opening your shared workspace"/>;}
-function AutomaticCloudEntry(){
-  const [configured,setConfigured]=useState<boolean|null>(null);
+function CloudPOSEntry({source}:{source?:string}){
+  const [authenticated,setAuthenticated]=useState<boolean|null>(null);
+  const [error,setError]=useState('');
+  const [attempt,setAttempt]=useState(0);
+  const opening=useRef<{attempt:number;promise:Promise<string|null>}|null>(null);
   useEffect(()=>{
     let active=true;
-    const remembered=uiStorage.getItem('dh-cloud-configured')==='1';
+    setError('');
+    void cloudRequest<{authenticated:boolean}>('pos-session').then(value=>{
+      if(active)setAuthenticated(value.authenticated);
+    }).catch(error=>{if(active)setError((error as Error).message);});
+    return()=>{active=false;};
+  },[attempt]);
+  useEffect(()=>{
+    if(!authenticated||source)return;
+    let active=true;
+    setError('');
+    if(opening.current?.attempt!==attempt)opening.current={attempt,promise:openAutomaticCloudWorkspace()};
+    void opening.current.promise.then(workspace=>{
+      if(!active)return;
+      if(!workspace)throw new Error('Your shop data is still connecting. Keep this device online and try again.');
+      uiStorage.setItem('dh-cloud-preferred-source',workspace);
+      location.replace(`/?shared=${encodeURIComponent(workspace)}`);
+    }).catch(error=>{
+      if(!active)return;
+      if((error as Error&{status?:number}).status===401)setAuthenticated(false);
+      setError((error as Error).message);
+    });
+    return()=>{active=false;};
+  },[authenticated,attempt,source]);
+  const signIn=async(pin:string)=>{
+    await cloudRequest('pos-login',{pin});
+    if(source){location.reload();return;}
+    opening.current=null;
+    setError('');
+    setAuthenticated(true);
+  };
+  if(authenticated===false)return <Login cloudLogin={signIn}/>;
+  if(error)return <div className="boot-error panel"><h2>Let’s reconnect your workspace.</h2><p role="alert">{error}</p><button className="button button-primary" onClick={()=>setAttempt(value=>value+1)}><RefreshCw size={14}/> Try again</button></div>;
+  if(authenticated&&source)return <NavigationProvider><WorkspaceApp/></NavigationProvider>;
+  return <Spinner label="Connecting your shop data"/>;
+}
+function AutomaticCloudEntry(){
+  const [configured,setConfigured]=useState<boolean|null>(null);
+  const [error,setError]=useState('');
+  const [attempt,setAttempt]=useState(0);
+  useEffect(()=>{
+    const reconnect=()=>{setConfigured(null);setAttempt(value=>value+1);};
+    window.addEventListener('online',reconnect);
+    return()=>window.removeEventListener('online',reconnect);
+  },[]);
+  useEffect(()=>{
+    let active=true;
+    const knownConfiguration=uiStorage.getItem('dh-cloud-configured');
+    const remembered=knownConfiguration==='1';
+    setError('');
     if(navigator.onLine===false){setConfigured(remembered);return;}
     void cloudRequest<{configured:boolean}>('status').then(value=>{
       if(value.configured)uiStorage.setItem('dh-cloud-configured','1');
+      else if(!remembered)uiStorage.setItem('dh-cloud-configured','0');
       if(active)setConfigured(value.configured||remembered);
-    }).catch(()=>{if(active)setConfigured(remembered);});
+    }).catch(error=>{
+      if(!active)return;
+      if(remembered)setConfigured(true);
+      else if(knownConfiguration==='0'||(error as Error&{status?:number}).status===404)setConfigured(false);
+      else setError((error as Error).message);
+    });
     return()=>{active=false;};
-  },[]);
+  },[attempt]);
+  if(error)return <div className="boot-error panel"><h2>Let’s reconnect your workspace.</h2><p role="alert">{error}</p><button className="button button-primary" onClick={()=>setAttempt(value=>value+1)}><RefreshCw size={14}/> Try again</button></div>;
   if(configured===null)return <Spinner label="Opening restaurant workspace"/>;
-  return configured?<CloudMonitor automatic restore/>:<NavigationProvider><WorkspaceApp/></NavigationProvider>;
+  return configured?<CloudPOSEntry/>:<NavigationProvider><WorkspaceApp/></NavigationProvider>;
 }
 export default function App(){
   const params=new URLSearchParams(location.search);
   useEffect(()=>{if(params.has('local'))uiStorage.removeItem('dh-cloud-preferred-source');},[]);
-  if(sharedCloudSource())return <SharedCloudGate/>;
-  if(params.has('cloud'))return <CloudMonitor restore={params.has('restore')}/>;
-  const preferred=params.has('local')?null:uiStorage.getItem('dh-cloud-preferred-source');
-  if(preferred&&/^[A-Za-z0-9_-]{1,160}$/.test(preferred))return <PreferredCloudRedirect source={preferred}/>;
+  if(sharedCloudSource())return <CloudPOSEntry source={sharedCloudSource()!}/>;
   return params.has('local')?<NavigationProvider><WorkspaceApp/></NavigationProvider>:<AutomaticCloudEntry/>;
 }

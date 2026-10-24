@@ -7,7 +7,7 @@ Keep the completed [customer handover record](CUSTOMER-HANDOVER.md), the trusted
 - **Device workspace:** open the same app URL in the same browser/profile used for setup, or its installed PWA. On a new empty device, choose **Set up this device** on the sign-in screen, enter the business/owner details, and create a private **6-12 digit Owner PIN**. Leave sample data off for a new live business. There is no fixed default owner PIN for a new device workspace.
 - **Existing workspace:** sign in with your private PIN. There is no separate admin URL; the Owner role has management access. If existing records suddenly appear missing, stop and check the URL/browser/profile before creating a new workspace.
 - **Shared branch hub:** use the branch's agreed HTTPS address and staff PIN. The hub and local network must be running. A device workspace on another phone is a separate database, even if it uses the same public website.
-- **Shared cloud POS:** open the agreed `/?shared=SOURCE_ID` link on every device, including the till, and sign in with the cloud owner account. Confirmed transactions use the same cloud stock and customer balances. The first implementation uses the owner account; local staff PIN accounts are not cloud accounts. Internet is required to confirm shared transactions.
+- **Shared cloud POS:** open the normal app address on every authorized device, including the till, and enter the same ordinary POS PIN when requested. The shop opens automatically. There is no separate cloud admin login, workspace picker or connection form. Confirmed transactions use the same cloud stock and customer balances. The shared owner PIN does not migrate separate local staff PIN accounts. Internet is required to confirm shared transactions.
 
 First setup and app caching need an online connection. After caching, test offline use before relying on it. Settings offers **Install app** where supported; the browser may also provide an install/add-to-home-screen menu. Installation does not create an independent backup or prevent site-data clearing. The app requests persistent storage once where supported, remembers refusals and offers a manual retry in Settings. The permission protects against automatic eviction, not deliberate deletion, formatting or device loss.
 
@@ -16,7 +16,7 @@ First setup and app caching need an online connection. After caching, test offli
 1. Check the correct branch/workspace and today's opening stock. Review low-stock items and any unfinished bills.
 2. Open a cash shift and enter the actual opening cash before accepting cash payments or cash debt collections.
 3. Check paper and print a test receipt after changing the printer. Adjust receipt paper/content width and margins in Settings; test the actual result.
-4. In local/hub mode, use the assigned staff PIN. Keep cloud owner credentials restricted to authorized people; cloud staff PIN authentication is not part of this release.
+4. In local/hub mode, use the assigned staff PIN. In shared cloud mode, keep the shop's private POS PIN restricted to its authorized owner/devices. Independent staff PIN/role migration is not part of this feature.
 
 ## Make a sale
 
@@ -64,10 +64,10 @@ Periodically test a device backup through **Restore device backup** in an empty 
 - For a storage/save error, stop repeated checkout attempts, keep any unsaved details, check the saved history, free space or contact support, and retry only after confirming the previous result. Do not clear site data to fix storage.
 - For lost records or a damaged device, preserve the device and latest backup; contact the named support person before replacing or resetting data.
 
-For cloud records after browser clearing or device loss, open the normal app address while online and sign in with the cloud owner account. A sole ready shared workspace opens automatically; if there are several, choose the intended workspace and **Open shared POS**. Its authorized records load again. Clearing site data removes remembered logins and workspace preferences, so recovery requires authentication. Check the latest sale, stock and loan balance before using the till again. Unuploaded offline changes, local photos, staff PIN credentials and unfinished device drafts are not recovered by reopening shared POS. A verified local `.hotelbackup` is needed for the omitted parts of the original local workspace.
+For cloud records after browser clearing or device loss, open the normal app address while online and enter the same private POS PIN. The shop and its authorized records load automatically; no cloud account or workspace selection is needed. Clearing site data removes the remembered login too, so recovery requires PIN authentication. Check the latest sale, stock and loan balance before using the till again. Unuploaded offline changes, local photos, staff PIN credentials and unfinished device drafts are not recovered by reopening shared POS. A verified local `.hotelbackup` is needed for the omitted parts of the original local workspace.
 
 Support contact / hours: ______________________________
 
 Backup operator / storage location: ______________________________
 
-Read [sales and customer dues](POS-SALES.md), the [device workspace guide](DEVICE-WORKSPACE.md) and the [cloud setup and recovery guide](CLOUD-SYNC.md). Independent device workspaces remain separate unless explicitly paired for viewing or moved to the same shared online workspace. Only acknowledged cloud records can be recovered from the cloud; installing the app alone does not provide that guarantee.
+Read [sales and customer dues](POS-SALES.md), the [device workspace guide](DEVICE-WORKSPACE.md) and the [cloud setup and recovery guide](CLOUD-SYNC.md). For the initial cloud transfer, open the original shop device first and keep it online until its existing records finish uploading. Independent local copies do not merge automatically into the shared shop. Only acknowledged cloud records can be recovered from the cloud; installing the app alone does not provide that guarantee.

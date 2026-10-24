@@ -5,12 +5,13 @@ import {LocalDatabase} from '../src/lib/local/db';
 import {initializeLocalWorkspace} from '../src/lib/local/seed';
 import {openAutomaticCloudWorkspace,connectDeviceToCloud,syncDeviceCloud} from '../src/lib/cloud-sync';
 import {createLocalApi} from '../src/lib/local/core';
+import {logoutLocal,getLocalUser} from '../src/lib/local/auth';
 import {createMonitorHandler} from '../server/monitor/handler';
 import {MemoryMonitorStore,recordKey} from '../server/monitor/store';
 
 const env={CLOUD_OWNER_EMAIL:'automatic@example.test',CLOUD_OWNER_PASSWORD:'automatic-test-password-1927',CLOUD_SESSION_SECRET:'a'.repeat(64)};
-function fixture(){
-  const store=new MemoryMonitorStore(),handler=createMonitorHandler({store,env});
+function fixture(configuration:NodeJS.ProcessEnv={...env}){
+  const store=new MemoryMonitorStore(),handler=createMonitorHandler({store,env:configuration});
   const client=()=>{
     let cookie='';
     const request:typeof fetch=async(input,init)=>{
@@ -83,6 +84,38 @@ test('automatic handoff uploads the original counter pending sale before enablin
     assert.equal(await openAutomaticCloudWorkspace({db,fetch:client.request}),connected.sourceId);
     const saved=(await f.store.get(connected.sourceId))!;
     assert.equal(saved.source.shared,true);assert.equal(Object.values(saved.records).filter(row=>row.kind==='order').length,1);
+    assert.equal(saved.records[recordKey('inventory','b1-prepared-m1')].value.quantity,49);
+  }finally{await db.delete();}
+});
+
+test('one verified POS PIN transfers a signed-out original device without a second local login',async()=>{
+  const f=fixture({CLOUD_POS_PIN:'98765432',CLOUD_SESSION_SECRET:'p'.repeat(64)}),client=f.client(),db=empty();
+  try{
+    await initializeLocalWorkspace({businessName:'Saved Original Shop',ownerName:'Original Owner',pin:'65432198',demo:true},db);
+    await logoutLocal(db);assert.equal(await getLocalUser(db),null);
+    await assert.rejects(openAutomaticCloudWorkspace({db,fetch:client.request}),/Sign in/);
+    assert.equal((await client.call('pos-login',{pin:'98765432'})).status,200);
+    const sourceId=await openAutomaticCloudWorkspace({db,fetch:client.request});assert.ok(sourceId);
+    const saved=(await f.store.get(sourceId))!;
+    assert.equal(saved.source.businessName,'Saved Original Shop');assert.equal(saved.source.shared,true);
+    assert.equal(saved.records[recordKey('inventory','b1-rice')].value.quantity,86);
+    assert.equal(await db.credentials.count(),1);assert.equal(await getLocalUser(db),null);
+  }finally{await db.delete();}
+});
+
+test('a POS PIN update renews the original grant and uploads pending sales without creating another source',async()=>{
+  const configuration={...env,CLOUD_POS_PIN:'98765432'},f=fixture(configuration),client=f.client(),db=empty();
+  try{
+    await initializeLocalWorkspace({businessName:'PIN Update Shop',ownerName:'Original Owner',pin:'65432198',demo:true},db);
+    const connected=await connectDeviceToCloud({email:env.CLOUD_OWNER_EMAIL,password:env.CLOUD_OWNER_PASSWORD,deviceName:'Original counter'},{db,fetch:client.request});
+    await syncDeviceCloud({db,fetch:client.request});
+    await createLocalApi(db)('/orders',{commandId:crypto.randomUUID(),branchId:'b1',type:'takeaway',lines:[{menuItemId:'m1',quantity:1}]});
+    configuration.CLOUD_POS_PIN='87654321';
+    assert.equal((await client.call('pos-login',{pin:'87654321'})).status,200);
+    assert.equal(await openAutomaticCloudWorkspace({db,fetch:client.request}),connected.sourceId);
+    const saved=(await f.store.get(connected.sourceId))!;
+    assert.equal((await f.store.list()).length,1);assert.equal(saved.source.shared,true);
+    assert.equal(Object.values(saved.records).filter(row=>row.kind==='order').length,1);
     assert.equal(saved.records[recordKey('inventory','b1-prepared-m1')].value.quantity,49);
   }finally{await db.delete();}
 });

@@ -27,14 +27,18 @@ function validateData(value:unknown,depth=0):void {
 export interface MonitorOptions {store?:MonitorStore;env?:NodeJS.ProcessEnv}
 export function createMonitorHandler(options:MonitorOptions={}) {
   const env=options.env??process.env;
+  const scryptFormat=/^scrypt\$[a-fA-F0-9]{64}\$[a-fA-F0-9]{128}$/;
+  const pinFormat=/^[0-9]{6,16}$/;
+  const posPinConfigured=()=>env.CLOUD_POS_PIN_HASH?scryptFormat.test(env.CLOUD_POS_PIN_HASH):pinFormat.test(env.CLOUD_POS_PIN??'');
+  const ownerLoginConfigured=()=>Boolean(env.CLOUD_OWNER_EMAIL&&(env.CLOUD_OWNER_PASSWORD_HASH||env.CLOUD_OWNER_PASSWORD));
   const missing=()=>[
-    !env.CLOUD_OWNER_EMAIL&&'CLOUD_OWNER_EMAIL',
-    !(env.CLOUD_OWNER_PASSWORD_HASH||env.CLOUD_OWNER_PASSWORD)&&'CLOUD_OWNER_PASSWORD_HASH',
+    !posPinConfigured()&&!ownerLoginConfigured()&&'CLOUD_POS_PIN_HASH',
     (!env.CLOUD_SESSION_SECRET||env.CLOUD_SESSION_SECRET.length<32)&&'CLOUD_SESSION_SECRET',
     !options.store&&!env.FIREBASE_DATABASE_URL&&'FIREBASE_DATABASE_URL',
     !options.store&&!env.FIREBASE_SERVICE_ACCOUNT_JSON&&'FIREBASE_SERVICE_ACCOUNT_JSON',
   ].filter(Boolean) as string[];
-  const version=()=>hash(`${env.CLOUD_OWNER_EMAIL}:${env.CLOUD_OWNER_PASSWORD_HASH??env.CLOUD_OWNER_PASSWORD}`);
+  // Rotating either login credential also revokes existing sessions and device grants.
+  const version=()=>hash(`${env.CLOUD_OWNER_EMAIL}:${env.CLOUD_OWNER_PASSWORD_HASH??env.CLOUD_OWNER_PASSWORD}:${env.CLOUD_POS_PIN_HASH??env.CLOUD_POS_PIN}`);
   const sign=(payload:Record<string,unknown>)=>{
     const text=Buffer.from(JSON.stringify(payload)).toString('base64url');
     return `${text}.${createHmac('sha256',env.CLOUD_SESSION_SECRET!).update(text).digest('base64url')}`;
@@ -44,20 +48,25 @@ export function createMonitorHandler(options:MonitorOptions={}) {
       const value=JSON.parse(Buffer.from(text,'base64url').toString());return value.purpose===purpose&&value.exp>Date.now()&&value.version===version()?value:null;
     }catch{return null;}
   };
-  const owner=(request:Request)=>{
+  const authenticated=(request:Request)=>{
     const cookie=request.headers.get('cookie')?.split(';').map(part=>part.trim()).find(part=>part.startsWith('hotel-cloud='))?.slice(12)??'';
-    check(verify(cookie,'owner'),'Sign in to the cloud owner account.',401,'UNAUTHENTICATED');
+    return Boolean(verify(cookie,'owner')||(posPinConfigured()&&verify(cookie,'pos-owner-v1')));
+  };
+  const owner=(request:Request)=>check(authenticated(request),'Sign in to your POS.',401,'UNAUTHENTICATED');
+  const scryptValid=(input:string,encoded:string)=>{
+    try{if(!scryptFormat.test(encoded))return false;const [,salt,digest]=encoded.split('$');return constant(scryptSync(input,Buffer.from(salt,'hex'),64).toString('hex'),digest.toLowerCase());}catch{return false;}
   };
   const passwordValid=(password:string)=>{
-    if(env.CLOUD_OWNER_PASSWORD_HASH){try{const [format,salt,digest]=env.CLOUD_OWNER_PASSWORD_HASH.split('$');return format==='scrypt'&&salt.length===64&&digest.length===128&&constant(scryptSync(password,Buffer.from(salt,'hex'),64).toString('hex'),digest);}catch{return false;}}
+    if(env.CLOUD_OWNER_PASSWORD_HASH)return scryptValid(password,env.CLOUD_OWNER_PASSWORD_HASH);
     return Boolean(env.CLOUD_OWNER_PASSWORD&&env.CLOUD_OWNER_PASSWORD.length>=12&&constant(password,env.CLOUD_OWNER_PASSWORD));
   };
+  const pinValid=(pin:string)=>pinFormat.test(pin)&&(env.CLOUD_POS_PIN_HASH?scryptValid(pin,env.CLOUD_POS_PIN_HASH):Boolean(env.CLOUD_POS_PIN&&constant(pin,env.CLOUD_POS_PIN)));
   return async(request:Request):Promise<Response>=>{
     const headers:Record<string,string>={'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store, private','X-Content-Type-Options':'nosniff'};
     const reply=(value:unknown,status=200)=>new Response(JSON.stringify(value),{status,headers});
     try{
       const url=new URL(request.url),action=url.searchParams.get('action')??'status',method=request.method.toUpperCase();
-      if(action==='status'&&method==='GET')return reply({configured:missing().length===0,missing:missing()});
+      if(action==='status'&&method==='GET')return reply({configured:missing().length===0,missing:missing(),posPinConfigured:posPinConfigured()});
       if(missing().length)return reply({error:'Cloud monitoring is not configured on this server.',code:'CLOUD_NOT_CONFIGURED',missing:missing()},503);
       check(/^[A-Za-z0-9_-]{1,80}$/.test(env.CLOUD_TENANT_ID??'hotel'),'Invalid cloud tenant configuration.',503);
       const store=options.store??firebaseMonitorStore(env);
@@ -66,7 +75,18 @@ export function createMonitorHandler(options:MonitorOptions={}) {
       if(mutating&&!['push','heartbeat'].includes(action))check(request.headers.get('origin')===url.origin,'This request must come from the same site.',403,'INVALID_ORIGIN');
       let body:any={};
       if(mutating){const text=await request.text();check(Buffer.byteLength(text)<=CLOUD_MONITOR_MAX_BYTES,'Cloud packet exceeds 700 KB.',413);try{body=JSON.parse(text);}catch{fail('Invalid JSON request.');}check(body&&typeof body==='object'&&!Array.isArray(body),'Invalid request body.');}
+      if(action==='pos-login'&&method==='POST'){
+        check(posPinConfigured(),'POS PIN sign-in is not configured on this server.',503,'POS_PIN_NOT_CONFIGURED');
+        const input=z.object({pin:z.string().max(64)}).strict().parse(body);
+        const ip=hash(request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()??'local');
+        check(await store.rate('pos-login-global',150,15*60000),'Too many PIN attempts. Try again later.',429,'RATE_LIMITED');
+        check(await store.rate(`pos-login-${ip}`,12,15*60000),'Too many PIN attempts. Try again later.',429,'RATE_LIMITED');
+        check(pinValid(input.pin),'The POS PIN is incorrect.',401,'INVALID_CREDENTIALS');
+        headers['Set-Cookie']=`hotel-cloud=${sign({purpose:'pos-owner-v1',version:version(),exp:Date.now()+12*3600000})}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200${url.protocol==='https:'?'; Secure':''}`;
+        return reply({ok:true});
+      }
       if(action==='login'&&method==='POST'){
+        check(ownerLoginConfigured(),'Owner account sign-in is not configured on this server.',503,'OWNER_LOGIN_NOT_CONFIGURED');
         const input=z.object({email:z.string().max(254),password:z.string().max(512)}).strict().parse(body);
         const ip=hash(request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()??'local');
         check(await store.rate('login-global',150,15*60000),'Too many sign-in attempts. Try again later.',429,'RATE_LIMITED');
@@ -75,15 +95,15 @@ export function createMonitorHandler(options:MonitorOptions={}) {
         headers['Set-Cookie']=`hotel-cloud=${sign({purpose:'owner',version:version(),exp:Date.now()+12*3600000})}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200${url.protocol==='https:'?'; Secure':''}`;
         return reply({ok:true});
       }
-      if(action==='session'&&method==='GET'){try{owner(request);return reply({authenticated:true});}catch{return reply({authenticated:false});}}
-      if(action==='logout'&&method==='POST'){headers['Set-Cookie']='hotel-cloud=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0';return reply({ok:true});}
+      if(['session','pos-session'].includes(action)&&method==='GET')return reply({authenticated:authenticated(request)});
+      if(['logout','pos-logout'].includes(action)&&method==='POST'){headers['Set-Cookie']=`hotel-cloud=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${url.protocol==='https:'?'; Secure':''}`;return reply({ok:true});}
       if(['push','heartbeat'].includes(action)&&method==='POST'){
         const bearer=request.headers.get('authorization')?.replace(/^Bearer /,'')??'';
         // Earlier writer purposes were issued by an unsafe anonymous endpoint.
         // Rotating the purpose revokes those capabilities without removing data.
         const token=verify(bearer,'owner-paired-writer-v3');
-        check(!verify(bearer,'writer')&&!verify(bearer,'owner-paired-writer-v2'),'This device uses an older cloud connection. Reconnect by signing in with the owner account at the normal app address. Pending local changes have not been deleted.',401,'DEVICE_RECONNECT_REQUIRED');
-        check(token,'The device connection has expired. Sign in with the owner account at the normal app address.',401,'INVALID_DEVICE');
+        check(!verify(bearer,'writer')&&!verify(bearer,'owner-paired-writer-v2'),'This device uses an older cloud connection. Reconnect by signing in to your POS at the normal app address. Pending local changes have not been deleted.',401,'DEVICE_RECONNECT_REQUIRED');
+        check(token,'The device connection has expired. Sign in to your POS at the normal app address.',401,'INVALID_DEVICE');
         const sourceId=id.parse(body.sourceId),epoch=id.parse(body.epoch);
         check(token!.sourceId===sourceId&&token!.epoch===epoch,'Device connection does not match this workspace.',403);
         if(action==='heartbeat'){
@@ -169,6 +189,16 @@ export function createMonitorHandler(options:MonitorOptions={}) {
         return reply({sourceId:usable.length===1?usable[0].sourceId:null,shared:usable.length===1,selectionRequired:usable.length>1});
       }
       if(action==='sources'&&method==='GET')return reply({sources:(await store.list()).filter(source=>!source.revoked)});
+      if(action==='refresh-device'&&method==='POST'){
+        const input=z.object({sourceId:id,workspaceId:id}).strict().parse(body);
+        const projection=await store.get(input.sourceId);
+        check(projection&&!projection.source.revoked,'The original device connection is unavailable.',404,'DEVICE_NOT_FOUND');
+        check(projection!.source.workspaceId===input.workspaceId,'This device does not match the saved business.',403,'WORKSPACE_MISMATCH');
+        check(!projection!.source.shared,'This business already uses shared POS. Open the normal app address to continue.',409,'SHARED_WORKSPACE');
+        // Re-authentication can renew a rotated credential version without
+        // creating another source, resetting its journal position or replacing data.
+        return reply({sourceId:projection!.source.sourceId,epoch:projection!.source.epoch,token:sign({purpose:'owner-paired-writer-v3',sourceId:projection!.source.sourceId,epoch:projection!.source.epoch,version:version(),exp:Date.now()+365*86400000})});
+      }
       if(action==='enroll'&&method==='POST'){
         const input=z.object({sourceId:id,businessName:z.string().trim().min(2).max(100),deviceName:z.string().trim().min(2).max(100),workspaceId:id}).strict().parse(body);
         check(!await store.get(input.sourceId),'This device is already linked. Revoke its old connection before pairing with a new source ID.',409,'ALREADY_LINKED');

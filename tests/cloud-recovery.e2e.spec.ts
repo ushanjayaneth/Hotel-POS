@@ -6,7 +6,12 @@ import {MemoryMonitorStore,recordKey} from '../server/monitor/store';
 import type {Customer,Order,Snapshot} from '../shared/types';
 
 test.setTimeout(150000);
-const email='recovery-owner@example.test',password='recovery-cloud-password-1927';
+const pin='98765432';
+
+async function signIn(page:Page){
+  await page.getByLabel('Staff PIN',{exact:true}).fill(pin);
+  await page.getByRole('button',{name:'Open workspace',exact:true}).click();
+}
 
 async function navigate(page:Page,name:string){
   const open=page.getByRole('button',{name:'Open navigation',exact:true});
@@ -34,9 +39,9 @@ async function localDatabaseState(page:Page){
   });
 }
 
-test('cleared browser data recovers the same stock, loan and bill only after cloud owner sign-in, even on a slow connection',async({browser})=>{
+test('cleared browser data recovers the same stock, loan and bill after the normal staff PIN, even on a slow connection',async({browser})=>{
   const store=new MemoryMonitorStore();
-  const app=await createApp({databasePath:':memory:',seed:true,monitor:{store,env:{CLOUD_OWNER_EMAIL:email,CLOUD_OWNER_PASSWORD:password,CLOUD_SESSION_SECRET:'r'.repeat(64)}}});
+  const app=await createApp({databasePath:':memory:',seed:true,monitor:{store,env:{CLOUD_POS_PIN:pin,CLOUD_SESSION_SECRET:'r'.repeat(64)}}});
   await app.register(staticPlugin,{root:resolve('dist'),wildcard:false});
   const origin=await app.listen({host:'127.0.0.1',port:0});
   const context=await browser.newContext({viewport:{width:1440,height:1000},serviceWorkers:'block'});
@@ -51,8 +56,7 @@ test('cleared browser data recovers the same stock, loan and bill only after clo
     await expect(page.getByRole('button',{name:'Add Chicken rice & curry',exact:true})).toBeVisible();
     expect((await localDatabaseState(page)).credentials).toBe(1);
     await page.goto(origin);
-    await page.getByLabel('Cloud owner email',{exact:true}).fill(email);await page.getByLabel('Cloud owner password',{exact:true}).fill(password);
-    await page.getByRole('button',{name:'Open cloud workspace',exact:true}).click();
+    await signIn(page);
     await expect(page.getByRole('heading',{level:1,name:/Point of sale/})).toBeVisible();
     const [source]=await store.list();expect(source.ready).toBe(true);
     const promotion=await context.request.post(`${origin}/api/cloud?action=promote`,{headers:{Origin:origin},data:{sourceId:source.sourceId}});expect(promotion.status()).toBe(200);
@@ -72,14 +76,14 @@ test('cleared browser data recovers the same stock, loan and bill only after clo
     for(const action of ['active-source',`snapshot&sourceId=${source.sourceId}`,`bootstrap&sourceId=${source.sourceId}`])expect((await context.request.get(`${origin}/api/cloud?action=${action}`)).status()).toBe(401);
     await page.setViewportSize({width:390,height:844});await page.goto(origin);
     expect(await localDatabaseState(page)).toEqual({credentials:0,records:0,workspace:false});
-    await expect(page.getByRole('heading',{level:1,name:'Sign in to your POS',exact:true})).toBeVisible();
-    await page.getByLabel('Cloud owner email',{exact:true}).fill(email);await page.getByLabel('Cloud owner password',{exact:true}).fill(password);
+    await expect(page.getByRole('heading',{name:'Welcome back.',exact:true})).toBeVisible();
+    await expect(page.getByLabel('Cloud owner email',{exact:true})).toHaveCount(0);
     let delayed=false,delayCompleted=false;
     await page.route(/\/api\/cloud\?action=bootstrap&/,async route=>{
       if(!delayed){delayed=true;await new Promise(resolve=>setTimeout(resolve,6500));delayCompleted=true;}
       await route.continue();
     });
-    await page.getByRole('button',{name:'Open cloud workspace',exact:true}).click();
+    await signIn(page);
     await expect(page).toHaveURL(new RegExp(`shared=${source.sourceId}`),{timeout:20000});
     await expect(page.getByRole('heading',{level:1,name:/Point of sale/})).toBeVisible({timeout:25000});
     expect(delayed).toBe(true);expect(delayCompleted).toBe(true);
@@ -94,6 +98,44 @@ test('cleared browser data recovers the same stock, loan and bill only after clo
     expect(snapshot.customers.find(row=>row.id===customer.id)?.balance).toBe(120000);
     expect(snapshot.inventory.find(row=>row.id==='b1-prepared-m1')?.quantity).toBe(48);
     const after=(await store.get(source.sourceId))!;expect(after.records).toEqual(before.records);expect(after.revision).toBe(before.revision);
+    expect(errors).toEqual([]);
+  }finally{await context.close();await app.close();}
+});
+
+test('a signed-out original device transfers its saved bills and stock after one server PIN login',async({browser})=>{
+  const store=new MemoryMonitorStore();
+  const app=await createApp({databasePath:':memory:',seed:true,monitor:{store,env:{CLOUD_POS_PIN:pin,CLOUD_SESSION_SECRET:'i'.repeat(64)}}});
+  await app.register(staticPlugin,{root:resolve('dist'),wildcard:false});
+  const origin=await app.listen({host:'127.0.0.1',port:0});
+  const context=await browser.newContext({viewport:{width:1440,height:1000},serviceWorkers:'block'});
+  const page=await context.newPage(),errors:string[]=[];
+  page.on('pageerror',error=>errors.push(error.message));
+  try{
+    await page.goto(`${origin}/?local=1`);await page.getByRole('button',{name:'Set up this device',exact:true}).click();
+    const setup=page.getByRole('dialog',{name:'Set up this device',exact:true});
+    await setup.getByLabel('Business name',{exact:true}).fill('Original Counter Hotel');
+    await setup.getByLabel('Owner name',{exact:true}).fill('Original Owner');
+    await setup.getByLabel(/^Owner PIN/).fill(pin);await setup.getByLabel('Confirm owner PIN',{exact:true}).fill(pin);
+    await setup.getByRole('checkbox',{name:/^Include sample menu/}).check();
+    await setup.getByRole('button',{name:'Create device workspace',exact:true}).click();
+    await page.getByRole('button',{name:'Add Chicken rice & curry',exact:true}).click();
+    await page.getByRole('button',{name:'Charge order',exact:true}).click();
+    await page.getByRole('dialog',{name:'Take payment',exact:true}).getByRole('button',{name:'Confirm payment',exact:true}).click();
+    await page.getByRole('dialog',{name:'Order receipt',exact:true}).getByRole('button',{name:'Close',exact:true}).click();
+    const original=await localDatabaseState(page);expect(original.credentials).toBe(1);
+    expect(await store.list()).toHaveLength(0);
+    await page.getByRole('button',{name:'Sign out',exact:true}).click();
+    await expect(page.getByLabel('Staff PIN',{exact:true})).toBeVisible();
+    expect(await page.evaluate(()=>sessionStorage.getItem('demo-hotel-local-session:demo-hotel-local-workspace-v1'))).toBeNull();
+    await page.goto(origin);await signIn(page);
+    await expect(page.getByRole('heading',{level:1,name:/Point of sale/})).toBeVisible();
+    const sources=await store.list();expect(sources).toHaveLength(1);expect(sources[0]).toMatchObject({ready:true,shared:true,businessName:'Original Counter Hotel'});
+    const projection=(await store.get(sources[0].sourceId))!;
+    expect(Object.values(projection.records).filter(row=>row.kind==='order'&&row.value.paymentStatus==='paid')).toHaveLength(1);
+    expect(projection.records[recordKey('inventory','b1-prepared-m1')].value.quantity).toBe(49);
+    expect(await localDatabaseState(page)).toEqual(original);
+    await expect(page.getByLabel('Cloud owner email',{exact:true})).toHaveCount(0);
+    await expect(page.getByRole('combobox',{name:'Cloud workspace',exact:true})).toHaveCount(0);
     expect(errors).toEqual([]);
   }finally{await context.close();await app.close();}
 });
