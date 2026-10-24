@@ -2,7 +2,7 @@ import {test,expect,type Page} from '@playwright/test';
 import staticPlugin from '@fastify/static';
 import {resolve} from 'node:path';
 import {createApp} from '../server/app';
-import {MemoryMonitorStore} from '../server/monitor/store';
+import {MemoryMonitorStore,type Projection} from '../server/monitor/store';
 
 test.setTimeout(150000);
 const pin='98765432';
@@ -11,6 +11,7 @@ async function signIn(page:Page){await page.getByLabel('Staff PIN',{exact:true})
 
 test('one PIN opens the same live POS on a phone and counter, and concurrent devices cannot oversell the last item',async({browser})=>{
   const store=new MemoryMonitorStore();
+  store.sources.set('main-store',{revision:1,source:{sourceId:'main-store',shared:true,lastSeenAt:'2026-10-22T10:48:44.671Z'},records:{},metadata:{},commands:{}} as Projection);
   const app=await createApp({databasePath:':memory:',seed:true,monitor:{store,env:{CLOUD_POS_PIN:pin,CLOUD_SESSION_SECRET:'b'.repeat(64)}}});
   await app.register(staticPlugin,{root:resolve('dist'),wildcard:false});
   const origin=await app.listen({host:'127.0.0.1',port:0});
@@ -27,7 +28,9 @@ test('one PIN opens the same live POS on a phone and counter, and concurrent dev
     await page.goto(origin);
     await signIn(page);
     await nav(page,'Settings');await expect(page.getByRole('button',{name:'Connect this shop device',exact:true})).toHaveCount(0);
-    const [source]=await store.list();expect(source.ready).toBe(true);
+    await expect(page.getByText('Ready in your browser',{exact:true})).toBeVisible();
+    await expect(page.getByRole('button',{name:'Install app',exact:true})).toHaveCount(0);
+    const source=(await store.list()).find(source=>source.ready&&source.shared)!;expect(source.ready).toBe(true);
     await remote.goto(`${origin}/?cloud=1`);await signIn(remote);
     await expect(remote).toHaveURL(new RegExp(`shared=${source.sourceId}`));
     await expect(remote.getByLabel('Cloud owner email',{exact:true})).toHaveCount(0);

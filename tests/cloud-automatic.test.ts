@@ -7,7 +7,7 @@ import {openAutomaticCloudWorkspace,connectDeviceToCloud,syncDeviceCloud} from '
 import {createLocalApi} from '../src/lib/local/core';
 import {logoutLocal,getLocalUser} from '../src/lib/local/auth';
 import {createMonitorHandler} from '../server/monitor/handler';
-import {MemoryMonitorStore,recordKey} from '../server/monitor/store';
+import {MemoryMonitorStore,recordKey,type Projection} from '../server/monitor/store';
 
 const env={CLOUD_OWNER_EMAIL:'automatic@example.test',CLOUD_OWNER_PASSWORD:'automatic-test-password-1927',CLOUD_SESSION_SECRET:'a'.repeat(64)};
 function fixture(configuration:NodeJS.ProcessEnv={...env}){
@@ -29,6 +29,33 @@ function fixture(configuration:NodeJS.ProcessEnv={...env}){
   return {store,client};
 }
 const empty=()=>new LocalDatabase(`automatic-${crypto.randomUUID()}`);
+const legacyShell=()=>({revision:1,source:{sourceId:'main-store',shared:true,lastSeenAt:'2026-10-22T10:48:44.671Z'},records:{},metadata:{},commands:{}} as Projection);
+
+test('a legacy empty unindexed heartbeat shell does not block the original shop transfer',async()=>{
+  const f=fixture(),client=f.client(),db=empty(),shell=legacyShell();
+  f.store.sources.set('main-store',shell);
+  const list=f.store.list.bind(f.store);f.store.list=async()=>(await list()).filter(source=>source.sourceId!=='main-store');
+  try{
+    await initializeLocalWorkspace({businessName:'Original Shop',ownerName:'Owner',pin:'98765432',demo:true},db);
+    await client.login();const sourceId=await openAutomaticCloudWorkspace({db,fetch:client.request});assert.ok(sourceId);
+    assert.notEqual(sourceId,'main-store');assert.equal((await f.store.get(sourceId))!.source.shared,true);
+    assert.equal((await f.store.get(sourceId))!.records[recordKey('inventory','b1-rice')].value.quantity,86);
+    assert.deepEqual(await f.store.get('main-store'),shell);
+  }finally{await db.delete();}
+});
+
+test('only a truly empty legacy shell can initialize normally; existing business records remain protected',async()=>{
+  for(const hasRecords of [false,true]){
+    const f=fixture(),client=f.client(),db=empty(),shell=legacyShell();
+    if(hasRecords)shell.records[recordKey('customer','saved')]={kind:'customer',id:'saved',branchId:null,value:{id:'saved',name:'Saved customer'}};
+    f.store.sources.set('main-store',shell);
+    try{
+      await client.login();const sourceId=await openAutomaticCloudWorkspace({db,fetch:client.request});
+      if(hasRecords){assert.equal(sourceId,null);assert.deepEqual(await f.store.get('main-store'),shell);}
+      else{assert.equal(sourceId,'main-store');assert.equal((await f.store.get(sourceId))!.source.ready,true);assert.equal((await f.store.get(sourceId))!.revision,2);}
+    }finally{await db.delete();}
+  }
+});
 
 test('automatic cloud connection still requires owner authentication and creates no anonymous database',async()=>{
   const f=fixture(),client=f.client(),db=empty();

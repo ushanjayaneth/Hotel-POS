@@ -146,10 +146,13 @@ export function createMonitorHandler(options:MonitorOptions={}) {
       owner(request);
       if(action==='workspace'&&method==='POST'){
         const input=z.object({create:z.boolean().default(false)}).strict().parse(body);
+        // An old heartbeat could leave an unindexed main-store shell with no
+        // enrollment identity or business data. It is not an unfinished import.
+        const emptyLegacyShell=(value:Projection)=>value.source.sourceId==='main-store'&&!value.source.workspaceId&&!value.source.epoch&&!value.source.revoked&&!value.metadata.settings&&Object.keys(value.records).length===0&&Object.keys(value.commands??{}).length===0;
         for(let attempt=0;attempt<6;attempt++){
           const listed=await store.list(),canonical=await store.get('main-store');
           if(canonical&&!listed.some(source=>source.sourceId==='main-store'))listed.push(canonical.source);
-          const projections=(await Promise.all(listed.filter(source=>!source.revoked).map(source=>store.get(source.sourceId)))).filter((value):value is Projection=>Boolean(value&&!value.source.revoked));
+          const projections=(await Promise.all(listed.filter(source=>!source.revoked).map(source=>store.get(source.sourceId)))).filter((value):value is Projection=>Boolean(value&&!value.source.revoked&&!emptyLegacyShell(value)));
           const usable=projections.filter(value=>value.source.ready&&value.metadata.settings&&Object.values(value.records).some(row=>row.kind==='branch'));
           const shared=usable.filter(value=>value.source.shared);
           if(shared.length===1){await store.publish(shared[0].source);return reply({sourceId:shared[0].source.sourceId});}
