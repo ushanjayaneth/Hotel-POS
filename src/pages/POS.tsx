@@ -718,7 +718,7 @@ export default function POS({
             <span>Orders are saved securely at your branch.</span>
           </div>
         </section>
-        <aside className={`order-panel panel ${mobileCart ? "cart-open" : ""}`}>
+        <aside className={`order-panel panel ${mobileCart ? "cart-open" : ""}`} aria-label="Current order" tabIndex={0}>
           <div className="order-panel-header">
             <div>
               <div className="eyebrow">CURRENT ORDER</div>

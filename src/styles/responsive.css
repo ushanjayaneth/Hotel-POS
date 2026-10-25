@@ -21,6 +21,14 @@ html, body, #root {
   overscroll-behavior: contain;
 }
 
+@media (min-width: 761px) {
+  .order-panel {
+    /* Continue scrolling the page until the ticket reaches its sticky top. */
+    overscroll-behavior-y: auto;
+    scroll-padding-block: 16px;
+  }
+}
+
 .modal {
   max-height: calc(var(--dialog-viewport-height, 100dvh) - 48px);
 }

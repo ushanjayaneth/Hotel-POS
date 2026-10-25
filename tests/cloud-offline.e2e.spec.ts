@@ -101,6 +101,71 @@ function paidOrders(projection:Projection){
   return Object.values(projection.records).filter(row=>row.kind==='order'&&row.value.paymentStatus==='paid').map(row=>row.value as unknown as Order);
 }
 
+test('the whole offline cart scrolls to payment on short desktops, tablets and phones with large text and both discounts',async({browser})=>{
+  const {app,counter,phone,page,errors}=await openSharedShop(browser);
+  try{
+    await navigate(page,'Settings');
+    await page.getByRole('slider',{name:'Font size',exact:true}).press('End');
+    await navigate(page,'Point of sale');
+    await counter.setOffline(true);
+    await expect(page.locator('.notice-banner')).toContainText('Working offline');
+    await page.getByRole('button',{name:'Add Cappuccino',exact:true}).click();
+    await page.getByRole('button',{name:'Add Watalappan',exact:true}).click();
+    await page.getByRole('button',{name:'Discount Cappuccino',exact:true}).click();
+    const item=page.getByRole('dialog',{name:'Item discount',exact:true});
+    await item.getByLabel('Discount amount (LKR)',{exact:true}).fill('20');
+    await item.getByRole('button',{name:'Apply discount',exact:true}).click();
+    await page.getByRole('button',{name:'Add cart discount',exact:true}).click();
+    const discount=page.getByRole('dialog',{name:'Cart discount',exact:true});
+    await discount.getByLabel('Discount amount (LKR)',{exact:true}).fill('100');
+    await discount.getByRole('button',{name:'Apply discount',exact:true}).click();
+    await expect(page.locator('.order-total')).toContainText('510.00');
+    const panel=page.getByRole('complementary',{name:'Current order',exact:true});
+    const charge=panel.getByRole('button',{name:'Charge order',exact:true});
+    const kitchen=panel.getByRole('button',{name:'Send to kitchen',exact:true});
+    const loan=panel.getByRole('button',{name:/^Customer Loan/});
+    const insideViewport=()=>panel.locator('.checkout-button,.credit-sale-button,.send-kitchen-button').evaluateAll(buttons=>buttons.length===3&&buttons.every(button=>{
+      const box=button.getBoundingClientRect();
+      return box.width>0&&box.top>=64&&box.bottom<=innerHeight&&box.left>=0&&box.right<=innerWidth;
+    }));
+    for(const longCart of [false,true]){
+      if(longCart){
+        await page.setViewportSize({width:1440,height:1000});
+        const close=page.getByRole('button',{name:'Close order',exact:true});
+        if(await close.isVisible())await close.click();
+        for(const button of (await page.locator('.product-card .product-add').all()).slice(0,8))await button.click();
+      }
+      for(const size of [{width:1920,height:998},{width:1366,height:768},{width:1280,height:600},{width:1024,height:600},{width:820,height:1180},{width:390,height:844},{width:740,height:390}]){
+        await page.setViewportSize(size);
+        const view=page.getByRole('button',{name:/^View order/});
+        if(await view.isVisible()&&!await panel.isVisible())await view.click();
+        await page.evaluate(()=>window.scrollTo(0,0));
+        await panel.evaluate(element=>{element.scrollTop=0;});
+        const box=(await panel.boundingBox())!;
+        await page.mouse.move(box.x+box.width/2,Math.min(size.height-30,Math.max(100,box.y+40)));
+        // Real wheel input must reach the footer without Playwright scrolling a
+        // hidden button into view on the user's behalf.
+        await expect.poll(async()=>{
+          if(await insideViewport())return true;
+          await page.mouse.wheel(0,650);return false;
+        },{timeout:10000,intervals:[100,200,300]}).toBe(true);
+        await expect(charge).toBeEnabled();await expect(loan).toBeEnabled();await expect(kitchen).toBeEnabled();
+        expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+        const visible=(await panel.boundingBox())!;
+        expect(visible.y+visible.height).toBeLessThanOrEqual(size.height+1);
+        if(!longCart&&size.width===1920)await page.screenshot({path:'artifacts/cart-layout-desktop.png'});
+        if(longCart&&size.width===390)await page.screenshot({path:'artifacts/cart-layout-phone.png'});
+      }
+    }
+    await charge.click();
+    const payment=page.getByRole('dialog',{name:'Take payment',exact:true});
+    await expect(payment).toBeVisible();
+    await payment.getByRole('button',{name:'Confirm payment',exact:true}).click();
+    await expect(page.getByRole('dialog',{name:'Order receipt',exact:true})).toBeVisible();
+    expect(errors).toEqual([]);
+  }finally{await counter.close();await phone.close();await app.close();}
+});
+
 test('the same verified staff PIN logs in offline after logout and reload without exposing credentials to Firebase',async({browser})=>{
   const {store,app,counter,phone,page,source,errors}=await openSharedShop(browser);
   try{

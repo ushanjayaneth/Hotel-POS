@@ -448,13 +448,18 @@
 .order-panel {
   position: sticky;
   top: 100px;
-  overflow: hidden;
-  min-height: 690px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  min-height: 0;
+  max-height: calc(100dvh - 116px);
   display: flex;
   flex-direction: column;
   background: linear-gradient(150deg, #263032ad, #172021cc);
   border-color: #ffffff0c;
   border-radius: 19px;
+}
+.order-panel > * {
+  flex-shrink: 0;
 }
 .order-panel-header {
   display: flex;
@@ -578,10 +583,8 @@
 }
 .cart-lines {
   padding: 0 20px;
-  flex: 1;
-  min-height: 195px;
-  max-height: 320px;
-  overflow-y: auto;
+  flex: 1 0 auto;
+  min-height: 80px;
 }
 .cart-line {
   display: flex;
@@ -1642,12 +1645,6 @@
   .category-tab {
     padding: 12px 15px;
     font-size: 11px;
-  }
-  .order-panel {
-    min-height: 770px;
-  }
-  .cart-lines {
-    max-height: 390px;
   }
 }
 @media (max-width: 1350px) {
