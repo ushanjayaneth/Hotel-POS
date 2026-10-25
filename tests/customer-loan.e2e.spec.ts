@@ -139,8 +139,10 @@ for (const mode of ['hub', 'device'] as const) {
     const ledger = page.getByRole('dialog', {name: 'Customer ledger & collection', exact: true});
     await expect(ledger).toContainText('Chicken rice & curry');
     await expect(ledger).toContainText('Ceylon milk tea');
-    await expect(ledger.getByLabel('Amount received (LKR)', {exact: true})).toHaveValue('800');
+    await expect(ledger.getByLabel('Amount received (LKR)', {exact: true})).toHaveValue('');
+    await expect(ledger.getByRole('button', {name: 'Record collection', exact: true})).toBeDisabled();
     await ledger.getByLabel('Amount received (LKR)', {exact: true}).fill('200');
+    await expect(ledger.getByRole('status', {name: 'Repayment preview', exact: true})).toContainText('600.00');
     await ledger.getByRole('button', {name: 'Record collection', exact: true}).click();
     await expect(ledger).toHaveCount(0);
     await expect(row).toContainText('600.00');

@@ -31,10 +31,10 @@ Use **Hold bill** to return to an unfinished basket. A held bill does not reserv
 ## Customer Loan and instalments
 
 1. Add the items and choose **Customer Loan**. Choose **Existing customer** to reuse a saved account, or **New customer** to enter a name and phone number. Email is optional. Check the details and outstanding balance, then choose **Continue to loan**.
-2. Review the account and amount in **Take payment**, tick the authorization confirmation, then choose **Confirm customer loan**. Before any payments or refunds have been recorded, **Change customer** lets you correct the account.
+2. Review the account and amount in **Take payment**. Enter any cash received immediately in **Paid now (cash) (LKR)**; leave zero for a full loan. For a LKR 650 bill with LKR 200 paid now, the drawer receives LKR 200 and only LKR 450 becomes customer debt. Review the breakdown, tick the authorization confirmation, then choose **Confirm cash & loan** or **Confirm customer loan**. Both parts save together; before any payments or refunds, **Change customer** lets you correct the account.
 3. You can also choose **Charge order → Customer Loan** and add/select the customer directly there; selecting a customer before checkout is optional. Cancelling the chooser creates no debt. An order already submitted remains in **Orders** if payment is cancelled.
 4. In **Customers & dues**, open **Ledger & collect** to review the credited bills/items and balance. Select the same saved customer on their next loan.
-5. When money is received, enter the amount actually paid and the payment method. Cash collections need an open cash shift.
+5. When money is received, enter only the amount actually paid and the payment method. The amount starts blank. Check **Repayment preview**: it shows the current loan, this payment and the remaining loan before saving. **Pay in full** fills the entire balance only when selected explicitly. Cash collections need an open cash shift.
 
 Customers may pay in parts: collecting LKR 300 against LKR 1,000 leaves LKR 700. Record the next instalment when received. Each collection keeps its own history; never enter the original sale again to record a repayment.
 
@@ -43,6 +43,8 @@ Customers may pay in parts: collecting LKR 300 against LKR 1,000 leaves LKR 700.
 Use **Products** for categories, prices, costs, barcodes, and **Low stock alert at**. A blank new-product threshold defaults to **5**. At or below the threshold, tracked products have a thin orange POS border. Recipe products use the portions available from their ingredients. Record real purchases, production, and stock adjustments instead of changing quantities to hide a discrepancy.
 
 For a product photo, use **Take photo** to open the camera, **Choose photo** to select a JPEG/PNG/WebP file, or paste an HTTPS image link. Camera/file images are optimized for clear product photos and saved as files no larger than 450 KB. They can be added offline and upload automatically when the app reconnects. Other devices download shared photos when needed and keep them for later offline use. An external image link still depends on that website and the network.
+
+**Daily profitability** shows a separate red **Customer loans to collect** panel with customer names, phone numbers and money still owed through the selected end date, including earlier loans. Actual repayments for the period appear in green. Bill-basis profit includes confirmed unpaid/loan sales; it is not the amount of cash received. Repayments reduce debt without booking another sale or extra profit. Credit refunds reduce debt without receiving money. **Profit CSV** includes the same loan totals and customer balances.
 
 For prepared food, record ingredients and packaging in their correct inventory units. In the recipe editor, enter the whole batch quantities and **Recipe yield (portions)**. LKR 10,000 of ingredients for 50 portions means LKR 200 food cost per portion; a LKR 350 selling price gives LKR 150 gross profit before other deductions. Reports use saved sale costs where available and identify estimates. Profit and cash received can differ, especially for credit bills.
 

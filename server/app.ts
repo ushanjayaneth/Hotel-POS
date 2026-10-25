@@ -252,11 +252,14 @@ export async function createApp(options: AppOptions = {}) {
   });
   app.post('/api/orders/:id/payments',async request=>{
     const user=getUser(request);permit(user,['owner','manager','cashier']);const params=z.object({id}).parse(request.params);
-    const body=z.object({commandId:command,expectedVersion:z.number().int().positive(),method,amount,received:money.optional(),reference:z.string().max(200).optional(),customerId:id.optional()}).parse(request.body);
+    const body=z.object({commandId:command,expectedVersion:z.number().int().positive(),method,amount,cashAmount:money.optional(),received:money.optional(),reference:z.string().max(200).optional(),customerId:id.optional()}).parse(request.body);
     const existing=getOrder(user,params.id);
     return store.command(body.commandId,user.id,`order.payment:${params.id}`,existing.branchId,body,()=>{
       const order=getOrder(user,params.id);versionCheck(order,body.expectedVersion);requireThat(!['cancelled','completed'].includes(order.status),'This order is closed.',409);
       const due=order.total-order.paid;requireThat(body.amount<=due,'Payment exceeds the outstanding balance.',409,'OVERPAYMENT');
+      const cashAmount=body.cashAmount??0;
+      requireThat(body.cashAmount===undefined||body.method==='credit','Cash paid now is only available with a Customer Loan.');
+      requireThat(cashAmount<body.amount,'Cash paid now must be less than the payment amount. Choose Cash for a fully paid bill.');
       requireThat(order.refunded===0,'A refunded order cannot accept new payments.',409);
       const shift=openShift(order.branchId);requireThat(shift,'Open a cash shift before accepting payments.',409,'SHIFT_REQUIRED');
       const received=body.received??body.amount;requireThat(body.method!=='cash'||received>=body.amount,'Cash received is less than the payment amount.');
@@ -270,14 +273,17 @@ export async function createApp(options: AppOptions = {}) {
         const financialHistory=order.payments.length>0||order.paid>0||order.refunded>0||store.list<CreditRecord>('credit',order.branchId).some(entry=>entry.orderId===order.id)||store.list<{orderId:string}>('refund',order.branchId).some(refund=>refund.orderId===order.id);
         requireThat(!financialHistory,'The customer cannot be changed after a payment or Customer Loan has been recorded.',409,'CUSTOMER_LOCKED');
       }
-      const payment={id:uid('payment'),orderId:order.id,method:body.method,amount:body.amount,received,change:body.method==='cash'?received-body.amount:0,reference:body.reference??'',createdAt:now()};
-      const paid=order.paid+body.amount;const updated:Order={...order,customerId,paid,paymentStatus:paid===order.total?'paid':'partial',payments:[...order.payments,payment],updatedAt:now(),version:order.version+1};
+      const timestamp=now();
+      const payment={id:uid('payment'),orderId:order.id,method:body.method,amount:body.amount-cashAmount,received:received-cashAmount,change:body.method==='cash'?received-body.amount:0,reference:body.reference??'',createdAt:timestamp};
+      const upfront:Order['payments']=cashAmount>0?[{id:uid('payment'),orderId:order.id,method:'cash',amount:cashAmount,received:cashAmount,change:0,reference:'',createdAt:timestamp}]:[];
+      const paid=order.paid+body.amount;const updated:Order={...order,customerId,paid,paymentStatus:paid===order.total?'paid':'partial',payments:[...order.payments,...upfront,payment],updatedAt:timestamp,version:order.version+1};
       // Payment and preparation are independent: a prepaid takeaway must remain in the kitchen queue.
       if(paid===order.total&&order.type!=='dine-in'&&order.status==='served')updated.status='completed';
       store.put('order',updated);
       if(body.method==='cash')store.put('shift',{...shift,expectedCash:shift.expectedCash+body.amount});
-      if(body.method==='credit'&&customer)store.put<CreditRecord>('credit',{id:`credit-${payment.id}`,branchId:order.branchId,customerId:customer.id,orderId:order.id,type:'sale',amount:body.amount,method:'credit',reference:payment.reference,note:`Credit sale ${order.number}`,createdAt:payment.createdAt,createdBy:user.id});
-      if(customer)store.put('customer',{...customer,spent:customer.spent+body.amount,visits:customer.visits+(paid===order.total?1:0),balance:customer.balance+(body.method==='credit'?body.amount:0),points:customer.points+Math.floor(body.amount/10000)});
+      else if(cashAmount>0)store.put('shift',{...shift,expectedCash:shift.expectedCash+cashAmount});
+      if(body.method==='credit'&&customer)store.put<CreditRecord>('credit',{id:`credit-${payment.id}`,branchId:order.branchId,customerId:customer.id,orderId:order.id,type:'sale',amount:payment.amount,method:'credit',reference:payment.reference,note:`Credit sale ${order.number}`,createdAt:payment.createdAt,createdBy:user.id});
+      if(customer)store.put('customer',{...customer,spent:customer.spent+body.amount,visits:customer.visits+(paid===order.total?1:0),balance:customer.balance+(body.method==='credit'?payment.amount:0),points:customer.points+Math.floor(body.amount/10000)});
       if(updated.status==='completed')releaseTable(updated);
       audit(user,order.branchId,'payment.accepted',`${order.number} · ${body.method} · ${body.amount}`);return {ok:true,order:publicOrder(user,updated),payment};
     });

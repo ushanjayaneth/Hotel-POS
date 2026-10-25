@@ -82,6 +82,10 @@ For an independent local workspace, the Owner can export an AES-256-GCM password
 
 Demonstrate a sale and partial loan collection on the shop device, then verify updated stock, loan balance and reports on a second phone. With both devices online, attempt to sell the final stock unit simultaneously and confirm one is rejected. Then disconnect one prepared device, log out, reload and sign in with the same Staff PIN. Add a product using the camera or file picker, change price/cost/stock, sell and print, record an expense and collection, and download reports. Reconnect and verify those exact records and amounts on the other device. Drop one acknowledgement and confirm no duplicate bill or payment appears. Separately test a cleared spare browser and an interrupted first upload; never clear the operating device while changes remain pending.
 
+Customer Loan checkout can record cash paid now and the remaining loan together in one replay-safe payment command. Only the cash part changes the drawer; only the credit part enters the customer's loan ledger. Prepared offline devices retain both parts until acknowledgement. Later partial collections subtract only the amount received. Collection forms start blank and show a remaining-balance preview; full repayment requires explicit entry or **Pay in full**.
+
+Profit reports distinguish bill-basis profitability from red customer receivables. Loan balances come from the selected branch ledger through the report end date, including older loans; period repayments are shown separately and do not create another sale or profit. Advances do not offset another customer's outstanding debt. CSV exports retain the same distinction.
+
 Keep separate backups and monitor the actual Firebase/Vercel quotas. No plan provides unlimited storage, bandwidth, function invocations or uptime.
 
 References: [Vercel Node functions](https://vercel.com/docs/functions/runtimes/node-js), [Firebase Admin setup](https://firebase.google.com/docs/admin/setup), [Admin Realtime Database access](https://firebase.google.com/docs/database/admin/start).

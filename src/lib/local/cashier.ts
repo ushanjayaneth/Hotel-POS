@@ -628,6 +628,7 @@ export async function handleCashier(
         expectedVersion: version,
         method: paymentMethod,
         amount,
+        cashAmount: money.optional(),
         received: money.optional(),
         reference: z.string().trim().max(200).default(""),
         customerId: identifier.optional(),
@@ -641,6 +642,9 @@ export async function handleCashier(
       409,
     );
     const due = checkedMoney(order.total - order.paid);
+    const cashAmount = body.cashAmount ?? 0;
+    requireLocal(body.cashAmount === undefined || body.method === 'credit', 'Cash paid now is only available with a Customer Loan.');
+    requireLocal(cashAmount < body.amount, 'Cash paid now must be less than the payment amount. Choose Cash for a fully paid bill.');
     requireLocal(
       body.amount <= due,
       "Payment exceeds the outstanding balance.",
@@ -696,19 +700,20 @@ export async function handleCashier(
       id: uid("payment"),
       orderId: order.id,
       method: body.method,
-      amount: body.amount,
-      received,
+      amount: body.amount - cashAmount,
+      received: received - cashAmount,
       change: body.method === "cash" ? received - body.amount : 0,
       reference: body.reference,
       createdAt: timestamp,
     };
+    const upfront: Payment[] = cashAmount > 0 ? [{id: uid('payment'), orderId: order.id, method: 'cash', amount: cashAmount, received: cashAmount, change: 0, reference: '', createdAt: timestamp}] : [];
     const paid = checkedMoney(order.paid + body.amount);
     const updated: Order = {
       ...order,
       customerId,
       paid,
       paymentStatus: paid === order.total ? "paid" : "partial",
-      payments: [...order.payments, payment],
+      payments: [...order.payments, ...upfront, payment],
       updatedAt: timestamp,
       version: order.version + 1,
     };
@@ -721,6 +726,7 @@ export async function handleCashier(
       updated.status = "completed";
     await store.put("order", updated);
     if (body.method === "cash") await moveCash(request, shift, body.amount);
+    else if (cashAmount > 0) await moveCash(request, shift, cashAmount);
     if (body.method === "credit" && customer)
       await store.put<CreditEntry>("credit", {
         id: `credit-${payment.id}`,
@@ -728,7 +734,7 @@ export async function handleCashier(
         customerId: customer.id,
         orderId: order.id,
         type: "sale",
-        amount: body.amount,
+        amount: payment.amount,
         method: "credit",
         reference: payment.reference,
         note: `Credit sale ${order.number}`,

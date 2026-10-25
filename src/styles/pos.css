@@ -110,6 +110,38 @@
   text-underline-offset: 3px;
   cursor: pointer;
 }
+.loan-split-payment {
+  margin: 18px 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #ffffff03;
+}
+.loan-split-payment .field small {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.7;
+}
+.loan-split-totals {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  font-size: 12px;
+}
+.loan-split-totals > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.loan-split-totals strong {
+  color: #a0e2bd;
+  overflow-wrap: anywhere;
+}
+.loan-split-totals > div:last-child strong {
+  color: var(--danger);
+}
 .shift-pill {
   font-size: 10px;
   color: #a6b4a8;

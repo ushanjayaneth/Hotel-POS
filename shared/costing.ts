@@ -1,4 +1,4 @@
-import type { Expense, InventoryItem, MenuItem, OrderLine, Recipe, Snapshot, StockMovement } from './types.js';
+import type { CreditEntry, Customer, Expense, InventoryItem, MenuItem, OrderLine, Recipe, Snapshot, StockMovement } from './types.js';
 
 export interface ProductCost {
   unitCost: number;
@@ -82,11 +82,50 @@ export interface ProfitReport {
   operatingProfit: number;
   refundedNetSales: number;
   outstanding: number;
+  loanSummary: LoanSummary | null;
   estimatedLines: number;
   missingCostLines: number;
   bills: number;
   products: ProductProfit[];
   daily: { date: string; netSales: number; costOfSales: number; cancelledCost: number; wastageCost: number; operatingExpenses: number; operatingProfit: number }[];
+}
+
+export interface LoanSummary {
+  asOf: string;
+  creditSales: number;
+  collections: number;
+  creditRefunds: number;
+  outstanding: number;
+  advances: number;
+  customers: {customerId: string; name: string; phone: string; balance: number}[];
+}
+
+/** Account repayments are not assigned to a particular bill. Keep the actual
+ * customer ledger separate from bill profit instead of inventing allocations. */
+function summarizeLoans(entries: CreditEntry[] | undefined, customers: Customer[] | undefined, branchId: string, from: string, to: string): LoanSummary | null {
+  if (!Array.isArray(entries)) return null;
+  const summary: LoanSummary = {asOf: to, creditSales: 0, collections: 0, creditRefunds: 0, outstanding: 0, advances: 0, customers: []};
+  const balances = new Map<string, number>();
+  for (const entry of entries) {
+    if (entry.branchId !== branchId) continue;
+    const date = businessDate(entry.createdAt);
+    if (date > to) continue;
+    balances.set(entry.customerId, (balances.get(entry.customerId) ?? 0) + (entry.type === 'sale' ? entry.amount : -entry.amount));
+    if (date < from) continue;
+    if (entry.type === 'sale') summary.creditSales += entry.amount;
+    else if (entry.type === 'collection') summary.collections += entry.amount;
+    else if (entry.type === 'refund') summary.creditRefunds += entry.amount;
+  }
+  const names = new Map((customers ?? []).map(customer => [customer.id, customer]));
+  for (const [customerId, balance] of balances) {
+    if (balance === 0) continue;
+    const customer = names.get(customerId);
+    summary.customers.push({customerId, name: customer?.name ?? customerId, phone: customer?.phone ?? '', balance});
+    summary.outstanding += Math.max(0, balance);
+    summary.advances += Math.max(0, -balance);
+  }
+  summary.customers.sort((a, b) => b.balance - a.balance || a.name.localeCompare(b.name));
+  return summary;
 }
 
 export function isInventoryExpense(expense: Pick<Expense, 'category'>): boolean {
@@ -96,8 +135,8 @@ export function isInventoryExpense(expense: Pick<Expense, 'category'>): boolean 
 /** Confirmed-bill basis, including credit/unpaid bills. Refunds restate the original bill date.
  * No inventory restock exists on refunds/cancellations, so the consumed cost stays recorded.
  */
-export function profitability(data: Pick<Snapshot, 'branch' | 'menu' | 'recipes' | 'inventory' | 'orders' | 'expenses'> & {stockMovements?:StockMovement[]}, from: string, to = from): ProfitReport {
-  const report: ProfitReport = { from, to, wastageCost: 0, netSales: 0, costOfSales: 0, grossProfit: 0, margin: 0, cancelledCost: 0, operatingExpenses: 0, excludedInventoryExpenses: 0, operatingProfit: 0, refundedNetSales: 0, outstanding: 0, estimatedLines: 0, missingCostLines: 0, bills: 0, products: [], daily: [] };
+export function profitability(data: Pick<Snapshot, 'branch' | 'menu' | 'recipes' | 'inventory' | 'orders' | 'expenses'> & Partial<Pick<Snapshot, 'creditEntries' | 'customers'>> & {stockMovements?:StockMovement[]}, from: string, to = from): ProfitReport {
+  const report: ProfitReport = { from, to, wastageCost: 0, netSales: 0, costOfSales: 0, grossProfit: 0, margin: 0, cancelledCost: 0, operatingExpenses: 0, excludedInventoryExpenses: 0, operatingProfit: 0, refundedNetSales: 0, outstanding: 0, loanSummary: summarizeLoans(data.creditEntries, data.customers, data.branch.id, from, to), estimatedLines: 0, missingCostLines: 0, bills: 0, products: [], daily: [] };
   const products = new Map<string, ProductProfit>();
   const days = new Map<string, ProfitReport['daily'][number]>();
   const dayRow = (date: string) => {
@@ -181,6 +220,17 @@ export function profitCsv(report: ProfitReport): string {
     ...report.products.map(product => [product.name, product.quantity, amount(product.netSales), amount(product.cost), amount(product.grossProfit), amount(product.wasteCost), product.estimated ? 'Includes estimates' : 'Captured at sale']),
     [], ['Estimated historical lines', report.estimatedLines], ['Missing cost configuration lines', report.missingCostLines],
     ['Inventory purchase expense entries excluded (LKR)', amount(report.excludedInventoryExpenses)],
+    [], ['Customer loans to collect', 'Account balances as of', report.to],
+    ...(report.loanSummary ? [
+      ['Customer loans outstanding (LKR)', amount(report.loanSummary.outstanding)],
+      ['Customer advances (LKR)', amount(report.loanSummary.advances)],
+      ['New Customer Loan amounts in period (LKR)', amount(report.loanSummary.creditSales)],
+      ['Loan repayments received in period (LKR)', amount(report.loanSummary.collections)],
+      ['Credit refunds reducing loans in period (LKR)', amount(report.loanSummary.creditRefunds)],
+      [], ['Customer', 'Phone', 'Amount to collect (LKR)', 'Customer advance (LKR)'],
+      ...report.loanSummary.customers.map(customer => [customer.name, customer.phone, amount(Math.max(0, customer.balance)), amount(Math.max(0, -customer.balance))]),
+      ['Loan basis', 'Outstanding includes older loans through the end date. Repayments are money received, not another sale or additional profit. Credit refunds reduce debt without receiving money. Loan balances include bill tax and service charges; customer advances are shown separately.'],
+    ] : [['Loan data', 'Unavailable: customer ledger was not included in this report.']]),
     ['Basis', 'Includes unpaid and credit bills. Excludes tax/service and stock purchases. Food refunds do not restore consumed cost. Other unrecorded costs and stock write-offs are excluded.'],
   ];
   return '\ufeff' + rows.map(row => row.map(csvCell).join(',')).join('\r\n');

@@ -1430,19 +1430,23 @@ export function PaymentDialog({
   const due = order ? Math.max(0, order.total - order.paid) : 0;
   const [amount, setAmount] = useState((due / 100).toString());
   const [received, setReceived] = useState((due / 100).toString());
+  const [paidNow, setPaidNow] = useState('0');
   const [reference, setReference] = useState("");
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [choosingCustomer, setChoosingCustomer] = useState(false);
   const [selectedCustomerId, setSelectedCustomerId] = useState('');
-  const [numberPad,setNumberPad]=useState<'amount'|'received'|null>(null);
+  const [numberPad,setNumberPad]=useState<'amount'|'received'|'paid-now'|null>(null);
   const [id] = useState(commandId);
   if (!order) return null;
   const customer = data.customers.find((item) => item.id === (selectedCustomerId || order.customerId));
   const canChooseCustomer = order.payments.length === 0 && order.paid === 0 && order.refunded === 0;
   const minor = Math.round(Number(amount) * 100);
   const receivedMinor = Math.round(Number(received) * 100);
+  const paidNowMinor = Math.round(Number(paidNow) * 100);
+  const loanAmount = method === 'credit' ? Math.max(0, minor - paidNowMinor) : 0;
+  const invalidPaidNow = method === 'credit' && (!Number.isSafeInteger(paidNowMinor) || paidNowMinor < 0 || paidNowMinor >= minor);
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!order || busy) return;
@@ -1452,6 +1456,7 @@ export function PaymentDialog({
       );
       return;
     }
+    if(invalidPaidNow){setError('Enter a cash amount below the payment amount. Choose Cash for a full cash payment.');return;}
     setError("");
     setBusy(true);
     try {
@@ -1460,13 +1465,14 @@ export function PaymentDialog({
         expectedVersion: order.version,
         method,
         ...(method === 'credit' && customer ? {customerId: customer.id} : {}),
+        ...(method === 'credit' && paidNowMinor > 0 ? {cashAmount: paidNowMinor} : {}),
         amount: minor,
         received: method === "cash" ? receivedMinor : minor,
         reference: method === "credit" ? "" : reference,
       });
       notify(
         method === "credit"
-          ? `Loan recorded for ${customer?.name}. Collect it from Customers & dues.`
+          ? `${paidNowMinor > 0 ? `${money(paidNowMinor)} received in cash. ` : ''}${money(loanAmount)} added to ${customer?.name}'s loan.`
           : minor < due
             ? "Partial payment recorded."
             : "Payment recorded. Thank you!",
@@ -1478,7 +1484,7 @@ export function PaymentDialog({
       setBusy(false);
     }
   }
-  if(numberPad)return <NumberPad title={numberPad==='amount'?'Payment amount (LKR)':'Cash received (LKR)'} value={numberPad==='amount'?amount:received} decimal min={numberPad==='amount'?.01:Number(amount)} max={numberPad==='amount'?due/100:10000000} onClose={()=>setNumberPad(null)} onConfirm={value=>{if(numberPad==='amount'){setAmount(value);setReceived(value);}else setReceived(value);setNumberPad(null);}}/>;
+  if(numberPad)return <NumberPad title={numberPad==='amount'?'Payment amount (LKR)':numberPad==='paid-now'?'Paid now (cash) (LKR)':'Cash received (LKR)'} value={numberPad==='amount'?amount:numberPad==='paid-now'?paidNow:received} decimal min={numberPad==='paid-now'?0:numberPad==='amount'?.01:Number(amount)} max={numberPad==='amount'?due/100:numberPad==='paid-now'?Math.max(0,(minor-1)/100):10000000} onClose={()=>setNumberPad(null)} onConfirm={value=>{if(numberPad==='amount'){setAmount(value);setReceived(value);}else if(numberPad==='paid-now')setPaidNow(value);else setReceived(value);setConfirmed(false);setNumberPad(null);}}/>;
   if (choosingCustomer) {
     return <POSCustomerDialog credit initialCustomerId={customer?.id} onClose={() => setChoosingCustomer(false)} onSelected={customerId => {
       setSelectedCustomerId(customerId);
@@ -1556,6 +1562,7 @@ export function PaymentDialog({
               onChange={(e) => {
                 setAmount(e.target.value);
                 setReceived(e.target.value);
+                setConfirmed(false);
               }}
             />
             <button type="button" className="icon-button" aria-label="Enter payment amount with keypad" disabled={busy} onClick={event=>{event.preventDefault();setNumberPad('amount');}}><Grid2X2 size={19}/></button></div>
@@ -1601,6 +1608,11 @@ export function PaymentDialog({
             </label>
           )}
         </div>
+        {method === 'credit' && <div className="loan-split-payment">
+          <label className="field"><span>Paid now (cash) (LKR)</span><div className="number-input-row"><input className="input" aria-label="Paid now (cash) (LKR)" type="number" required min="0" max={Math.max(0,(minor-1)/100)} step="0.01" value={paidNow} disabled={busy} onChange={event=>{setPaidNow(event.target.value);setConfirmed(false);setError('');}}/><button type="button" className="icon-button" aria-label="Enter cash paid now with keypad" disabled={busy} onClick={()=>setNumberPad('paid-now')}><Grid2X2 size={19}/></button></div><small>Enter zero for a full loan. Only the remaining amount is added to this customer's dues.</small></label>
+          <div className="loan-split-totals" aria-label="Cash and customer loan breakdown"><div><span>Cash received now</span><strong>{money(Number.isFinite(paidNowMinor)?Math.max(0,paidNowMinor):0)}</strong></div><div><span>Remaining Customer Loan</span><strong>{money(Number.isFinite(loanAmount)?loanAmount:0)}</strong></div></div>
+          {invalidPaidNow && <p className="error-message" role="alert">Enter a cash amount below the payment amount. Choose Cash for a full cash payment.</p>}
+        </div>}
         {method === "cash" ? (
           <>
             <div className="cash-shortcuts">
@@ -1635,7 +1647,7 @@ export function PaymentDialog({
             />
             <span>
               {method === "credit"
-                ? `I confirm ${customer?.name || 'the selected customer'} is authorised for this customer loan. The amount will be added to their outstanding dues.`
+                ? `I confirm ${customer?.name || 'the selected customer'} is authorised for this customer loan.${paidNowMinor > 0 ? ` ${money(paidNowMinor)} has been received in cash.` : ''} ${money(Number.isFinite(loanAmount)?loanAmount:0)} will be added to their outstanding dues.`
                 : "I have verified the approved payment on the terminal or bank account. This action records the payment; it does not charge a card."}
             </span>
           </label>
@@ -1657,6 +1669,7 @@ export function PaymentDialog({
               minor > due ||
               (method === "cash" && receivedMinor < minor) ||
               (method === "credit" && !customer) ||
+              invalidPaidNow ||
               (method !== "cash" && !confirmed)
             }
           >
@@ -1664,7 +1677,7 @@ export function PaymentDialog({
             {busy
               ? "Recording..."
               : method === "credit"
-                ? "Confirm customer loan"
+                ? paidNowMinor > 0 ? "Confirm cash & loan" : "Confirm customer loan"
                 : "Confirm payment"}
           </button>
         </div>

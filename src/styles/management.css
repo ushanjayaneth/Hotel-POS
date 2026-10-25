@@ -2557,6 +2557,25 @@
   }
 }
 
+.collection-preview {
+  display: grid;
+  gap: 11px;
+  padding: 16px;
+  margin-top: 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #ffffff03;
+  font-size: 12px;
+}
+.collection-preview > div {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.collection-preview strong {
+  overflow-wrap: anywhere;
+}
 /* The workspace supplies the outer gutter on every screen. */
 .workspace > .management-page {
   padding: 0;

@@ -1,9 +1,20 @@
 import { useState } from 'react';
 import { ArrowDownRight, ArrowUpRight, CalendarDays, Download, Leaf, TrendingUp } from 'lucide-react';
 import type { Snapshot } from '../../shared/types';
-import { businessDate, profitability, profitCsv } from '../../shared/costing';
+import { businessDate, profitability, profitCsv, type LoanSummary } from '../../shared/costing';
 import { money, number } from '../lib/format';
 import '../styles/profit.css';
+
+export function LoanReceivables({summary, asOf}: {summary: LoanSummary | null; asOf: string}) {
+  if (!summary) return <section className="loan-receivables loan-unavailable" aria-label="Customer loans to collect"><h3>Customer loans to collect</h3><p>Loan balances are unavailable because the customer ledger was not included in this view.</p></section>;
+  return <section className={`loan-receivables ${summary.outstanding > 0 ? 'loan-outstanding' : 'loan-settled'}`} aria-label="Customer loans to collect">
+    <div className="loan-receivables-heading"><div><span className="eyebrow">MONEY STILL TO RECEIVE</span><h3>Customer loans to collect</h3><p>Outstanding as of {asOf} · includes loans from before this report period</p></div><strong aria-label="Outstanding customer loans">{money(summary.outstanding)}</strong></div>
+    <div className="loan-period-metrics"><div><span>New Customer Loans in period</span><strong>{money(summary.creditSales)}</strong></div><div className="loan-repayments"><span>Repayments received in period</span><strong>{money(summary.collections)}</strong></div><div><span>Credit refunds reducing loans</span><strong>{money(summary.creditRefunds)}</strong></div></div>
+    {summary.customers.length > 0 ? <div className="loan-customer-scroll"><table className="profit-table"><thead><tr><th>Customer</th><th>Phone</th><th>Amount to collect</th><th>Customer advance</th></tr></thead><tbody>{summary.customers.map(customer => <tr key={customer.customerId}><td><strong>{customer.name}</strong></td><td>{customer.phone || '—'}</td><td className={customer.balance > 0 ? 'profit-negative' : undefined}>{money(Math.max(0, customer.balance))}</td><td className={customer.balance < 0 ? 'profit-positive' : undefined}>{money(Math.max(0, -customer.balance))}</td></tr>)}</tbody></table></div> : <p className="loan-clear">No customer loans or advances are outstanding as of this date.</p>}
+    {summary.advances > 0 && <p className="loan-advance-note">Customer advances: {money(summary.advances)}. These do not reduce amounts owed by other customers.</p>}
+    <p className="loan-explanation">Loan balances show money still to receive. Repayments reduce the loan balance; they are not another sale or additional profit. Credit refunds reduce debt without receiving money. Loan amounts include any bill tax and service charges.</p>
+  </section>;
+}
 
 export default function ProfitSummary({ data, from, to }: { data: Snapshot; from?: string; to?: string }) {
   const today = businessDate(new Date().toISOString());
@@ -25,7 +36,7 @@ export default function ProfitSummary({ data, from, to }: { data: Snapshot; from
   }
   return <section className="profit-summary panel" aria-label="Daily profitability">
     <div className="profit-heading">
-      <div className="profit-title"><span className="profit-icon"><TrendingUp size={20} /></span><div><span className="eyebrow">KNOW YOUR MARGIN</span><h2>Daily profitability</h2><p>Ingredients become portions. Portions become profit.</p></div></div>
+      <div className="profit-title"><span className="profit-icon"><TrendingUp size={20} /></span><div><span className="eyebrow">KNOW YOUR MARGIN</span><h2>Daily profitability</h2><p>Bill profit and money still owed, shown separately.</p></div></div>
       <div className="profit-controls">
         {!from && <label><CalendarDays size={14} /><span className="sr-only">Profit from date</span><input aria-label="Profit from date" type="date" value={start} max={end} onChange={event => setStart(event.target.value || today)} /></label>}
         {!to && <label><span className="sr-only">Profit to date</span><input aria-label="Profit to date" type="date" value={end} min={selectedFrom} onChange={event => setEnd(event.target.value || today)} /></label>}
@@ -33,15 +44,17 @@ export default function ProfitSummary({ data, from, to }: { data: Snapshot; from
       </div>
     </div>
     {invalidRange ? <p className="profit-notice">Choose an end date on or after the start date.</p> : <>
+      <p className="profit-bill-basis"><strong>Bill basis · includes unpaid bills and Customer Loans</strong><span>Profit below is based on confirmed sales. It does not mean all of the money has been received.</span></p>
+      <LoanReceivables summary={report.loanSummary} asOf={selectedTo} />
       <div className="profit-metrics">
         <div><span>Net food &amp; product sales</span><strong>{money(report.netSales)}</strong><small>{number(report.bills)} confirmed bills · after discounts / refunds</small></div>
         <div><span>Cost of sales</span><strong>{money(report.costOfSales)}</strong><small>Purchased goods, ingredients &amp; prepared portions</small></div>
-        <div className={report.grossProfit >= 0 ? 'profit-positive' : 'profit-negative'}><span>Gross profit</span><strong>{money(report.grossProfit)}</strong><small>{report.margin.toFixed(1)}% gross margin · before overheads</small></div>
+        <div className={report.grossProfit >= 0 ? 'profit-positive' : 'profit-negative'}><span>Gross profit · bill basis</span><strong>{money(report.grossProfit)}</strong><small>{report.margin.toFixed(1)}% gross margin · includes unpaid / loan sales · before overheads</small></div>
       </div>
       <div className="profit-result">
         <div className={`profit-result-main ${profitable ? 'profit-positive' : 'profit-negative'}`}>
           {profitable ? <ArrowUpRight size={27} /> : <ArrowDownRight size={27} />}
-          <div><span>Operating profit estimate</span><strong>{money(report.operatingProfit)}</strong></div>
+          <div><span>Operating profit estimate · bill basis</span><strong>{money(report.operatingProfit)}</strong></div>
         </div>
         <div className="profit-deductions"><span>Gross profit <b>{money(report.grossProfit)}</b></span><span>Cancelled food cost <b>− {money(report.cancelledCost)}</b></span><span>Recorded wastage <b>? {money(report.wastageCost)}</b></span><span>Recorded operating expenses <b>− {money(report.operatingExpenses)}</b></span></div>
       </div>

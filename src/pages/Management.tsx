@@ -303,6 +303,7 @@ export default function Management({ page }: { page: Page }) {
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(
     null,
   );
+  const [collectionAmount, setCollectionAmount] = useState('');
   const [reportFrom, setReportFrom] = useState(dayKey(data.serverTime));
   const [reportTo, setReportTo] = useState(dayKey(data.serverTime));
   const [busy, setBusy] = useState(false);
@@ -392,6 +393,7 @@ export default function Management({ page }: { page: Page }) {
   const open = (next: Dialog) => {
     setError("");
     setFormCommandId(commandId());
+    if(next === 'customer-ledger')setCollectionAmount('');
     setDialog(next);
   };
   const close = () => {
@@ -403,17 +405,17 @@ export default function Management({ page }: { page: Page }) {
   const submit = async (
     event: FormEvent<HTMLFormElement>,
     action: (fields: FormData) => Promise<unknown>,
-    success: string,
+    success: string | ((result: unknown) => string),
   ) => {
     event.preventDefault();
     if (busy || menuPhotoBusy) return;
     setBusy(true);
     setError("");
     try {
-      await action(new FormData(event.currentTarget));
+      const result = await action(new FormData(event.currentTarget));
       await refresh();
       setDialog(null);
-      notify(success);
+      notify(typeof success === 'function' ? success(result) : success);
     } catch (cause) {
       setError(
         cause instanceof Error
@@ -692,7 +694,7 @@ export default function Management({ page }: { page: Page }) {
         icon={<ReceiptText size={18} />}
       />
       <Stat
-        label={"Cash collected"}
+        label={"Cash at checkout"}
         amount={money(cashSales)}
         note={`${"Card"} · ${money(cardSales)}`}
         icon={<Wallet size={18} />}
@@ -854,7 +856,7 @@ export default function Management({ page }: { page: Page }) {
     { key: "cash", label: "Cash", color: "#b7f67a" },
     { key: "card", label: "Card", color: "#99bafc" },
     { key: "qr", label: "QR", color: "#cab0f5" },
-    { key: "credit", label: "Credit", color: "#f0b77a" },
+    { key: "credit", label: "Customer Loan", color: "#ff9e9a" },
   ].map((method) => ({
     ...method,
     amount: completed.reduce(
@@ -873,7 +875,7 @@ export default function Management({ page }: { page: Page }) {
       <div className="management-card-heading">
         <div>
           <h2>{"Payment breakdown"}</h2>
-          <p>{"How your guests paid"}</p>
+          <p>{"Checkout payments and amounts placed on account"}</p>
         </div>
         <CreditCard size={18} />
       </div>
@@ -908,7 +910,7 @@ export default function Management({ page }: { page: Page }) {
           })}
         </svg>
         <div>
-          <span>{"Collected"}</span>
+          <span>{"Payments & loans"}</span>
           <strong>{money(paymentTotal)}</strong>
         </div>
       </div>
@@ -1103,6 +1105,8 @@ export default function Management({ page }: { page: Page }) {
   const selectedCustomer = data.customers.find(
     (customer) => customer.id === selectedCustomerId,
   );
+  const collectionMinor = Math.round(Number(collectionAmount) * 100);
+  const validCollection = collectionAmount.trim() !== '' && Number.isSafeInteger(collectionMinor) && collectionMinor > 0 && collectionMinor <= (selectedCustomer?.balance ?? 0);
   const customerEntries = data.creditEntries
     .filter(
       (entry) =>
@@ -1139,7 +1143,7 @@ export default function Management({ page }: { page: Page }) {
         <Stat
           label="Outstanding dues"
           amount={money(
-            data.customers.reduce((sum, customer) => sum + customer.balance, 0),
+            data.customers.reduce((sum, customer) => sum + Math.max(0, customer.balance), 0),
           )}
           note={`Receivables at ${data.branch.name}`}
           icon={<Wallet size={18} />}
@@ -4040,13 +4044,16 @@ export default function Management({ page }: { page: Page }) {
                             note: value(fields, "note"),
                           },
                         ),
-                      "Customer payment collected and ledger updated",
+                      result => {
+                        const saved = result as {entry: {amount: number}; balance: number};
+                        return `${money(saved.entry.amount)} received. Remaining loan: ${money(saved.balance)}.`;
+                      },
                     )
                   }
                 >
                   <h3>Record a collection</h3>
                   <p>
-                    Apply a payment against this customer’s outstanding balance.
+                    Enter only the amount received now. The remaining loan stays on this customer’s account.
                   </p>
                   <div className="form-grid">
                     <Field label="Amount received (LKR)">
@@ -4058,7 +4065,10 @@ export default function Management({ page }: { page: Page }) {
                         max={selectedCustomer.balance / 100}
                         step="0.01"
                         required
-                        defaultValue={selectedCustomer.balance / 100}
+                        value={collectionAmount}
+                        disabled={busy}
+                        placeholder="Enter amount received"
+                        onChange={event=>setCollectionAmount(event.target.value)}
                       />
                     </Field>
                     <Field label="Payment method">
@@ -4091,14 +4101,20 @@ export default function Management({ page }: { page: Page }) {
                       />
                     </Field>
                   </div>
+                  <div className="collection-preview" aria-label="Repayment preview" role="status">
+                    <div><span>Current loan</span><strong>{money(selectedCustomer.balance)}</strong></div>
+                    <div><span>Receiving now</span><strong>{money(validCollection ? collectionMinor : 0)}</strong></div>
+                    <div><span>Remaining loan after payment</span><strong className={validCollection && collectionMinor === selectedCustomer.balance ? 'text-mint' : 'text-amber'}>{money(selectedCustomer.balance - (validCollection ? collectionMinor : 0))}</strong></div>
+                  </div>
                   <div className="form-error" role="alert">
                     {error}
                   </div>
                   <div className="form-actions">
+                    <button className="button button-ghost" type="button" disabled={busy} onClick={()=>setCollectionAmount((selectedCustomer.balance/100).toFixed(2))}>Pay in full</button>
                     <button
                       className="button button-primary"
                       type="submit"
-                      disabled={busy}
+                      disabled={busy || !validCollection}
                     >
                       <Check size={15} />
                       {busy ? "Recording…" : "Record collection"}

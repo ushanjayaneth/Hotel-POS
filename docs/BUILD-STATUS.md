@@ -24,6 +24,8 @@ This repository contains a working evaluation version of DEMO HOTEL with standal
 - In-app Back across screens, dialogs, drawers and POS filters; per-device editable keyboard shortcuts and text-size controls.
 - Products, unique barcodes/SKUs, branch stock counts, and category/product creation from the register.
 - Shared held bills with version checks and atomic order consumption; customer credit ledgers and collections.
+- Atomic cash paid now plus remaining Customer Loan checkout, with separate receipt payments, drawer cash and customer debt. Loan collections start with a blank amount and show the remaining balance before saving; full repayment has an explicit action.
+- Red customer receivables in profitability reports and CSV, separate from clearly labeled bill-basis profit; partial repayments reduce the ledger without booking another sale. Historical balances follow the selected end date and branch, including older loans and separate advances.
 - Sales history with filters/CSV, income/expense cash-flow CSV and print/PDF, and day-end reconciliation exports.
 - Per-device receipt widths, margins, offset and text size; honest hub printer discovery, individual LAN port checks, keyboard-scanner tests and optional WebHID access.
 - Render/Vercel deployment templates with persistent storage and same-origin cookie authentication guidance.

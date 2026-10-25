@@ -270,6 +270,85 @@ test('shared POS prints and retains an offline bill, then merges it once after a
   }finally{await counter.close();await phone.close();await app.close();}
 });
 
+test('cash paid now and the remaining loan stay separate through offline checkout, later repayments and live reports',async({browser})=>{
+  const {store,app,counter,phone,page,remote,source,errors}=await openSharedShop(browser);
+  try{
+    const before=(await store.get(source.sourceId))!;
+    const openingCash=Object.values(before.records).find(row=>row.kind==='shift'&&row.value.status==='open')!.value.expectedCash as number;
+    await counter.setOffline(true);
+    await page.getByRole('button',{name:'Add Chicken rice & curry',exact:true}).click();
+    await page.getByRole('button',{name:/^Customer Loan/}).click();
+    const customer=page.getByRole('dialog',{name:'Customer Loan',exact:true});
+    await customer.getByRole('button',{name:'New customer',exact:true}).click();
+    await customer.getByLabel('Customer name',{exact:true}).fill('Split Loan Guest');
+    await customer.getByLabel('Phone number',{exact:true}).fill('0771122334');
+    await customer.getByRole('button',{name:'Continue to loan',exact:true}).click();
+    const payment=page.getByRole('dialog',{name:'Take payment',exact:true});
+    await payment.getByLabel('Paid now (cash) (LKR)',{exact:true}).fill('650');
+    await expect(payment.getByRole('button',{name:'Confirm cash & loan',exact:true})).toBeDisabled();
+    await payment.getByLabel('Paid now (cash) (LKR)',{exact:true}).fill('200');
+    const breakdown=payment.getByLabel('Cash and customer loan breakdown',{exact:true});
+    await expect(breakdown.locator('div').filter({hasText:'Cash received now'})).toContainText('200.00');
+    await expect(breakdown.locator('div').filter({hasText:'Remaining Customer Loan'})).toContainText('450.00');
+    await page.setViewportSize({width:390,height:844});
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+    await payment.getByRole('checkbox').check();
+    await payment.getByRole('button',{name:'Confirm cash & loan',exact:true}).click();
+    const receipt=page.getByRole('dialog',{name:'Order receipt',exact:true});
+    await expect(receipt).toContainText('CASH');await expect(receipt).toContainText('CREDIT');
+    await expect(receipt).toContainText('200.00');await expect(receipt).toContainText('450.00');
+    await receipt.getByRole('button',{name:'Close',exact:true}).click();
+    await page.setViewportSize({width:1440,height:1000});
+    await navigate(page,'Reports');
+    const profit=page.getByRole('region',{name:'Daily profitability',exact:true});
+    const loans=profit.getByRole('region',{name:'Customer loans to collect',exact:true});
+    await expect(loans.getByLabel('Outstanding customer loans',{exact:true})).toHaveText('Rs. 450.00');
+    await expect(loans).toHaveClass(/loan-outstanding/);
+    await expect(loans.getByRole('row').filter({hasText:'Split Loan Guest'})).toContainText('0771122334');
+    await expect(profit).toContainText('Bill basis');
+    const initialProfit=await profit.locator('.profit-result-main strong').innerText();
+    await page.screenshot({path:'artifacts/split-loan-report.png',fullPage:true});
+    const download=page.waitForEvent('download');await profit.getByRole('button',{name:'Profit CSV',exact:true}).click();
+    const file=await download;const csv=await readFile((await file.path())!,'utf8');
+    expect(csv).toContain('Split Loan Guest');expect(csv).toContain('450.00');
+    await page.reload();await expect(loans.getByLabel('Outstanding customer loans',{exact:true})).toHaveText('Rs. 450.00');
+    for(const amount of ['100','350']){
+      await navigate(page,'Customers & dues');
+      const row=page.getByRole('row').filter({hasText:'Split Loan Guest'});
+      await row.getByRole('button',{name:'Ledger & collect',exact:true}).click();
+      const ledger=page.getByRole('dialog',{name:'Customer ledger & collection',exact:true});
+      const received=ledger.getByRole('spinbutton',{name:'Amount received (LKR)',exact:true});
+      await expect(received).toHaveValue('');
+      await expect(ledger.getByRole('button',{name:'Record collection',exact:true})).toBeDisabled();
+      await received.pressSequentially(amount);
+      const preview=ledger.getByRole('status',{name:'Repayment preview',exact:true});
+      await expect(preview.locator('div').filter({hasText:'Remaining loan after payment'})).toContainText(amount==='100'?'350.00':'0.00');
+      await ledger.getByRole('button',{name:'Record collection',exact:true}).click();
+      await expect(ledger).toHaveCount(0);
+      await navigate(page,'Reports');
+      await expect(loans.getByLabel('Outstanding customer loans',{exact:true})).toHaveText(amount==='100'?'Rs. 350.00':'Rs. 0.00');
+      await expect(profit.locator('.profit-result-main strong')).toHaveText(initialProfit);
+    }
+    await expect(loans.locator('.loan-repayments strong')).toHaveText('Rs. 450.00');
+    await recoverConnection(counter,page);
+    await expect.poll(async()=>{
+      const saved=(await store.get(source.sourceId))!;
+      return {
+        paidBills:paidOrders(saved).length,
+        balance:Object.values(saved.records).find(row=>row.kind==='customer'&&row.value.name==='Split Loan Guest')?.value.balance,
+        cash:Object.values(saved.records).find(row=>row.kind==='shift'&&row.value.status==='open')?.value.expectedCash,
+      };
+    },{timeout:20000}).toEqual({paidBills:1,balance:0,cash:openingCash+65000});
+    const cloud=(await store.get(source.sourceId))!;
+    const [order]=paidOrders(cloud);
+    expect(order.payments.map(payment=>({method:payment.method,amount:payment.amount}))).toEqual([{method:'cash',amount:20000},{method:'credit',amount:45000}]);
+    expect(Object.values(cloud.records).find(row=>row.kind==='shift'&&row.value.status==='open')!.value.expectedCash).toBe(openingCash+65000);
+    await refreshPhone(remote);await navigate(remote,'Reports');
+    await expect(remote.getByLabel('Outstanding customer loans',{exact:true})).toHaveText('Rs. 0.00');
+    expect(errors).toEqual([]);
+  }finally{await counter.close();await phone.close();await app.close();}
+});
+
 test('offline customer loans and partial repayments survive reload and appear on the other device after reconnecting',async({browser})=>{
   const {store,app,counter,phone,page,remote,source,original,errors}=await openSharedShop(browser);
   try{

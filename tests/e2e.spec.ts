@@ -372,7 +372,9 @@ test('a POS category and barcoded product can be held, updated, sold on credit a
   await navigate(page,'Customers & dues');
   await page.getByRole('row').filter({hasText:'Browser Credit Guest'}).getByRole('button',{name:'Ledger & collect',exact:true}).click();
   const ledger=page.getByRole('dialog',{name:'Customer ledger & collection',exact:true});
-  await expect(ledger.getByRole('spinbutton',{name:'Amount received (LKR)',exact:true})).toHaveValue('45.75');
+  await expect(ledger.getByRole('spinbutton',{name:'Amount received (LKR)',exact:true})).toHaveValue('');
+  await expect(ledger.getByRole('button',{name:'Record collection',exact:true})).toBeDisabled();
+  await ledger.getByRole('button',{name:'Pay in full',exact:true}).click();
   await ledger.getByRole('textbox',{name:'Note (optional)',exact:true}).fill('Browser collection');
   await expect(ledger.getByRole('textbox',{name:'Note (optional)',exact:true})).toHaveValue('Browser collection');
   await expect(ledger.getByRole('spinbutton',{name:'Amount received (LKR)',exact:true})).toHaveValue('45.75');
