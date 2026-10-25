@@ -32,15 +32,15 @@ async function derive(pin: string, salt: string, count = iterations): Promise<st
   const bits = await crypto.subtle.deriveBits({name: 'PBKDF2', salt: unhex(salt), iterations: count, hash: 'SHA-256'}, key, 256);
   return hex(new Uint8Array(bits));
 }
-export async function createLocalCredential(staffId: string, pin: string): Promise<LocalCredential> {
-  requireLocal(/^\d{4,12}$/.test(pin), 'Use a PIN containing 4 to 12 digits.');
+export async function createLocalCredential(staffId: string, pin: string, maxDigits: 12 | 16 = 12): Promise<LocalCredential> {
+  requireLocal(/^\d{4,16}$/.test(pin) && pin.length <= maxDigits, `Use a PIN containing 4 to ${maxDigits} digits.`);
   const salt = hex(crypto.getRandomValues(new Uint8Array(32)));
   const hash = await derive(pin, salt);
   const timestamp = now();
   return {staffId, salt, hash, iterations, algorithm: 'PBKDF2-SHA256', version: 1, createdAt: timestamp, updatedAt: timestamp};
 }
-export async function verifyLocalPin(pin: string, credential: LocalCredential): Promise<boolean> {
-  if (!/^\d{4,12}$/.test(pin) || credential.algorithm !== 'PBKDF2-SHA256' || credential.version !== 1
+export async function verifyLocalPin(pin: string, credential: LocalCredential, maxDigits: 12 | 16 = 12): Promise<boolean> {
+  if (!/^\d{4,16}$/.test(pin) || pin.length > maxDigits || credential.algorithm !== 'PBKDF2-SHA256' || credential.version !== 1
     || !Number.isInteger(credential.iterations) || credential.iterations < 100_000 || credential.iterations > 2_000_000
     || !/^[a-f0-9]{64}$/.test(credential.salt) || !/^[a-f0-9]{64}$/.test(credential.hash)) return false;
   const attempted = await derive(pin, credential.salt, credential.iterations);

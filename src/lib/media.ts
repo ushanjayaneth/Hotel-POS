@@ -6,6 +6,9 @@ import {isDeviceWorkspace} from './workspace-mode';
 import {sameMedia, type MediaRecord} from '../../shared/media';
 
 const pendingFiles = new WeakMap<File, Promise<MediaInput & {commandId: string}>>();
+// Base64 adds one third to the file size. This leaves room for the immutable
+// record, audit event and sync envelope inside a 700 KB cloud transaction.
+const uploadTargetBytes = Math.min(MAX_MEDIA_BYTES, 450_000);
 const canvasBlob = (canvas: HTMLCanvasElement, quality: number) => new Promise<Blob>((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('This browser could not compress the photo.')), 'image/jpeg', quality));
 async function fileBase64(blob: Blob): Promise<string> {
   const bytes = new Uint8Array(await blob.arrayBuffer());
@@ -35,16 +38,16 @@ async function preparePhoto(file: File): Promise<MediaInput & {commandId: string
     canvas.height = Math.max(1, Math.round(source.height * ratio));
     const context = canvas.getContext('2d');
     if (!context) throw new Error('Photo compression is unavailable in this browser.');
-    const draw = () => {context.fillStyle = '#ffffff'; context.fillRect(0, 0, canvas.width, canvas.height); context.drawImage(source, 0, 0, canvas.width, canvas.height);};
+    const draw = () => {context.imageSmoothingEnabled = true; context.imageSmoothingQuality = 'high'; context.fillStyle = '#ffffff'; context.fillRect(0, 0, canvas.width, canvas.height); context.drawImage(source, 0, 0, canvas.width, canvas.height);};
     draw();
     let photo = await canvasBlob(canvas, 0.84);
-    for (const quality of [0.72, 0.6, 0.48]) {if (photo.size <= MAX_MEDIA_BYTES) break; photo = await canvasBlob(canvas, quality);}
-    while (photo.size > MAX_MEDIA_BYTES && canvas.width > 240 && canvas.height > 240) {
+    for (const quality of [0.72, 0.6, 0.48]) {if (photo.size <= uploadTargetBytes) break; photo = await canvasBlob(canvas, quality);}
+    while (photo.size > uploadTargetBytes && canvas.width > 240 && canvas.height > 240) {
       canvas.width = Math.max(1, Math.round(canvas.width * 0.75));
       canvas.height = Math.max(1, Math.round(canvas.height * 0.75));
       draw(); photo = await canvasBlob(canvas, 0.7);
     }
-    if (photo.size > MAX_MEDIA_BYTES) throw new Error('The photo could not be compressed below 700 KB. Choose a smaller image.');
+    if (photo.size > uploadTargetBytes) throw new Error('The photo could not be compressed for cloud storage. Choose a smaller image.');
     const payload = {id: `media-${crypto.randomUUID()}`, mime: 'image/jpeg' as const, data: await fileBase64(photo), byteLength: photo.size, width: canvas.width, height: canvas.height};
     assertMediaPayload(payload);
     return {...payload, commandId: commandId()};

@@ -2,6 +2,7 @@ import { cert, getApps, initializeApp } from 'firebase-admin/app';
 import { getDatabase, type Database } from 'firebase-admin/database';
 import { createHash } from 'node:crypto';
 import type { CloudChange, CloudSource } from '../../shared/cloud-monitor.js';
+import {sameMedia,type MediaRecord} from '../../shared/media.js';
 
 export interface Projection {
   revision: number;
@@ -18,6 +19,8 @@ export interface MonitorStore {
   rate(key: string, limit: number, windowMs: number): Promise<boolean>;
   touch(id: string, time: string): Promise<void>;
   publish(source: CloudSource): Promise<void>;
+  getMedia?(sourceId:string,id:string):Promise<MediaRecord|null>;
+  putMedia?(sourceId:string,record:MediaRecord):Promise<boolean>;
 }
 export const recordKey = (kind: string, id: string) => Buffer.from(JSON.stringify([kind, id])).toString('base64url');
 
@@ -25,6 +28,13 @@ export const recordKey = (kind: string, id: string) => Buffer.from(JSON.stringif
 export class MemoryMonitorStore implements MonitorStore {
   readonly sources = new Map<string, Projection>();
   readonly attempts = new Map<string, { count: number; until: number }>();
+  readonly media=new Map<string,MediaRecord>();
+  async getMedia(sourceId:string,id:string){return structuredClone(this.media.get(recordKey(sourceId,id))??null);}
+  async putMedia(sourceId:string,record:MediaRecord){
+    const key=recordKey(sourceId,record.id),previous=this.media.get(key);
+    if(previous&&!sameMedia(previous,record))return false;
+    if(!previous)this.media.set(key,structuredClone(record));return true;
+  }
   async get(id: string) { return structuredClone(this.sources.get(id) ?? null); }
   async touch(id: string, time: string) { const value = this.sources.get(id); if (value) value.source.lastSeenAt = time; }
   async publish(_source: CloudSource) { }
@@ -43,6 +53,17 @@ export class MemoryMonitorStore implements MonitorStore {
 export class FirebaseMonitorStore implements MonitorStore {
   constructor(private database: Database, private tenant: string) { }
   private root() { return this.database.ref(`hotelMonitor/${this.tenant}`); }
+  async getMedia(sourceId:string,id:string){
+    const value=(await this.root().child(`media/${sourceId}/${id}`).get()).val();
+    return value?.json?JSON.parse(value.json) as MediaRecord:null;
+  }
+  async putMedia(sourceId:string,record:MediaRecord){
+    const result=await this.root().child(`media/${sourceId}/${record.id}`).transaction(current=>{
+      if(current){try{if(!sameMedia(JSON.parse(current.json),record))return undefined;}catch{return undefined;}}
+      return {json:JSON.stringify(record)};
+    },undefined,false);
+    return result.committed;
+  }
   async touch(id: string, time: string) { await this.root().child(`index/${id}/lastSeenAt`).set(time); }
   async publish(source: CloudSource) {
     const cleanSource: CloudSource = {

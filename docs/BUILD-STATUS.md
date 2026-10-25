@@ -1,12 +1,14 @@
 # Implementation status
 
-This repository contains a working local evaluation version of DEMO HOTEL. It is not the complete production rollout described in the master plan.
+This repository contains a working evaluation version of DEMO HOTEL with standalone, branch-hub and shared Firebase modes. It is not the complete production rollout described in the master plan.
 
 ## Implemented
 
 - Vercel/Firebase shared POS, original-device baseline/journal uploads with durable retry, private POS PIN sessions and scoped device grants; requires real server credentials, `CLOUD_POS_PIN_HASH` and the deployment checks in [CLOUD-SYNC.md](CLOUD-SYNC.md).
 - Authenticated cloud recovery after clearing browser data: reopen the same shared stock, sales and loan records with the ordinary POS PIN, without creating a public default PIN or overwriting an independent local database. Anonymous data reads/enrollment and obsolete writer grants are rejected.
-- Shared **online owner** POS with atomic cloud stock checks and command replay. The same POS PIN opens the shop across its authorized devices, without a separate cloud account. Independent local staff PIN migration and automatic offline financial merging remain outside this feature.
+- Shared owner POS with an atomic per-device offline transaction queue. Bills, payments, loans, collections, catalog/stock edits, expenses, reports, purchases, production and wastage work after one online sign-in/cache. Ordered uploads retain receipt identities and merge financial deltas without duplicate acknowledgements. Online final-stock checks remain atomic; genuine offline shortages retain the sale and require review.
+- The same Staff PIN works offline after one verified online PIN entry on each browser/profile. Salted PBKDF2 credentials remain source-scoped on the device; logout retains them and pending bills. Offline PIN attempts are throttled across tabs and reloads; site-data clearing requires online preparation again.
+- Camera capture, file selection and HTTPS links for product photos. Uploaded images are optimized to JPEG at most 450,000 bytes, stored privately and separately in Firebase, and downloaded into each device's offline cache on demand. Offline uploads queue until reconnecting. Browser printing and receipt reprinting work offline; physical hardware acceptance still needs the site's printer.
 - Separate network/cloud status dots, touch quantity/amount numpads, compatible recipe weight/volume conversions, and captured-cost wastage logs/exports with operating-estimate deductions.
 - Safe manual PWA updates that flush drafts, stop on failed/pending storage and do not reload other active tabs automatically.
 - Dialogs rendered above glass panels, including offline backup export/restore, with nested scroll locks and keyboard-aware mobile sizing.
@@ -28,7 +30,7 @@ This repository contains a working local evaluation version of DEMO HOTEL. It is
 - Standalone device workspaces on static HTTPS hosting, with atomic IndexedDB business writes, salted local PIN credentials, transaction replay protection, journal entries, and local role/branch checks.
 - One-time device setup with an owner-selected PIN; optional sample data; persistent-storage request once, manual retry, browser usage/quota information, and no automatic business-record deletion.
 - Owner-only password-encrypted worker backups, validation/preview before replacement, session exclusion/invalidation, new device identity on restore, and recoverable draft import.
-- Local uploaded product photos, pre-save JPEG compression to at most 700,000 bytes, offline display, and authenticated same-origin hub copy retries without deleting original bytes.
+- Local uploaded product photos, pre-save JPEG compression to at most 450,000 bytes with a maximum 1,600-pixel edge, offline display, and authenticated same-origin hub copy retries without deleting saved bytes.
 - Recipe batch yields and packaging, weighted purchase/production cost, unit costs captured on confirmed order lines, daily/product profitability, and profit CSV export. Historical lines without saved cost are marked as estimates.
 - Per-product low-stock thresholds with default 5, branch-specific quantities and recipe portions, and orange POS card outlines at the threshold.
 - Fixed LKR discounts on individual product lines and the whole cart, with permission checks, held-bill persistence, receipt breakdown and preserved cost/stock quantities.
@@ -36,7 +38,7 @@ This repository contains a working local evaluation version of DEMO HOTEL. It is
 
 ## Required before a live single-branch pilot
 
-- Select independent device, shared branch hub or shared online Firebase mode. Configure the shared shop's server credentials and private POS PIN once; all its authorized devices use the normal app address. Finish the original shop device's first upload before opening fresh devices. Independent local workspaces remain separate.
+- Select independent device, shared branch hub or shared Firebase mode with prepared offline access. Configure the shared shop's server credentials and private POS PIN once; all its authorized devices use the normal app address. Finish the original shop device's first upload before opening fresh devices. Verify online PIN preparation, offline logout/sign-in, billing/printing and reconnection on each device. Independent local workspaces remain separate.
 - Independent backup storage and restore drills for the selected mode. Browser quota/persistence remains controlled by the platform; installed PWAs are not independent backups.
 - Trusted HTTPS/DNS and, for hub mode, service supervision and a protected database directory.
 - If Firebase replication is required: authorized server identity, receiver hosting, secure branch credentials, deployed access rules, and real end-to-end replication/recovery checks. The repository's rules and receiver code are not evidence that the actual project is connected.
@@ -49,7 +51,7 @@ This repository contains a working local evaluation version of DEMO HOTEL. It is
 - Consolidation and inter-branch operational controls across independent cloud sources. The normal POS opens the configured shop rather than combining separate businesses.
 - Full double-entry accounting, accrual financial statements, supplier settlements, and closing-period controls. Customer credit collections and cash-flow statements are implemented.
 - Advanced purchasing approvals, costing corrections, stock-count sessions, batch expiry policies, modifiers, and combo mapping.
-- Controlled offline authorization leases, managed enrollment, automatic encrypted second-device backup, and standby promotion with receipt-series recovery.
+- Centrally managed offline authorization leases/revocation, managed enrollment, automatic encrypted second-device backup, and standby promotion with receipt-series recovery. Cached same-PIN offline sign-in is implemented.
 - Safe standalone-to-hub migration, automatic device financial/stock journal merging, and central management across independent device workspaces. Photo copying does not provide those capabilities.
 - Raw ESC/POS/cash drawer/auto-cutter drivers and automatic kitchen/bar/counter KOT routing; physical printer integration is still required. Payment provider integrations, loyalty, attendance/payroll, catering and online ordering remain as scoped.
 

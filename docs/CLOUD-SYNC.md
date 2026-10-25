@@ -2,7 +2,7 @@
 
 The normal app address uses one backend-configured Firebase Realtime Database for the shop. Open that address on each authorized phone, tablet or computer and enter the ordinary **POS PIN** when requested. The app opens the shop automatically. There is no separate cloud admin login, workspace picker, or Cloud connection form in Settings.
 
-The Firebase URL and Admin credentials stay on the server. A signed, HttpOnly session authorizes each device after PIN verification. Direct anonymous database reads and writes remain denied. An internet connection or a configured flag alone does not prove a successful database write.
+The Firebase URL and Admin credentials stay on the server. A signed, HttpOnly session authorizes cloud requests after PIN verification. A successful online PIN entry also saves a salted PBKDF2 credential in that device's private local database for offline sign-in. This local credential is never uploaded to Firebase or included in business records. Direct anonymous database reads and writes remain denied. An internet connection or a configured flag alone does not prove a successful database write.
 
 ## Configure Vercel once
 
@@ -45,18 +45,28 @@ Orders, payments, loans, partial collections, stock, recipes, production, purcha
 
 The shop's ordinary POS PIN gives its authorized owner access from their devices. Separate cloud staff PIN/role migration is outside this feature. Legacy independent uploads are rejected after their source becomes shared, so an old local snapshot cannot overwrite current shared balances.
 
-**Shared confirmations require internet.** During an outage, a device can retain its cached view and new draft; it cannot confirm a shared sale, payment or stock change until the server accepts it. Separate offline financial writers are not automatically reconciled. A payment is saved before printing, so a printer failure does not cancel it.
+Open and sign in on each device once while online to prepare its separate offline cache. Afterwards it can confirm bills, receive payments, print/reprint receipts, manage customer loans and collections, add products/photos, change prices and stock, record expenses, and view or download reports without internet. Categories, recipes, production, purchases, wastage and business settings use the same local transaction queue. Installing the PWA is optional; a supported browser at the same address can perform these operations.
+
+Use the same shop **Staff PIN** for online and offline sign-in. After it has been verified online on that browser/profile, logging out retains its local PIN hash, cached business records and unsynced transactions. The PIN can unlock the prepared device offline after logout or reload. A remembered server cookie alone does not prepare an offline PIN; a device that has not completed this online PIN entry must do so once. Ten unsuccessful offline PIN attempts temporarily block further attempts for 15 minutes. A successful online PIN entry refreshes the saved credential and clears that local lock.
+
+Every action and its upload entry commit together in that device's IndexedDB database. The app uploads queued actions in order when it is open and can reach Firebase. Receipt IDs and captured prices stay unchanged. A lost acknowledgement retries the same transaction ID and cannot create another sale or payment. Pending records are never replaced by a newer cloud snapshot. After upload, the other devices refresh their stock, loans, bills and reports automatically. An expired server session requires the same POS PIN before uploads resume; queued records remain saved.
+
+Online stock checks still reject two devices selling the same final unit. Several disconnected devices cannot see one another's stock changes: when genuine offline sales exceed the remaining stock, the app preserves the completed bills, records the resulting shortage and adds a review warning. Financial rows merge as transactions and deltas. Concurrent catalog edits merge per field and retain conflict details in the audit log. A payment is saved before printing, so a printer failure does not cancel it. Printing uses the browser/operating-system print service; raw ESC/POS, automatic cutters and cash-drawer drivers remain separate hardware work.
+
+For product photos, use **Take photo** for the device camera, **Choose photo** for JPEG/PNG/WebP files, or enter an HTTPS image link. Camera and file images are optimized to JPEG at most 450,000 bytes with a maximum 1,600-pixel edge. This preserves useful product detail without promising lossless compression. Photos save on the device while offline and upload automatically with its queued changes after reconnecting.
+
+Uploaded photos are stored privately in Firebase separately from bill data. Authorized devices download each photo on demand and retain it for offline use; routine stock/report refreshes do not download the entire photo library again. A photo that has not yet been downloaded cannot appear on a disconnected replacement device. Older photos that remain only in an independent original workspace are not implied to be uploaded by migrating its business records.
 
 The shared POS checks for server changes while visible. The network and cloud dots report different states: **Online/Offline** describes this device's network; the cloud indicator reports actual recent server contact and whether uploads or connection failures remain. A green network dot alone is not proof that a sale reached Firebase.
 
 ## Recovery after browser clearing or device loss
 
 1. Open the normal trusted app address while online on the replacement device or cleared browser.
-2. Enter the same private POS PIN when requested. Clearing site data clears its session too; private shop records are not returned to an anonymous browser.
+2. Enter the same private POS PIN when requested. Clearing site data removes its session, offline PIN credential and cache; private shop records are not returned to an anonymous browser. The new online PIN entry prepares offline sign-in again.
 3. The app opens the shop automatically and loads its authorized cloud stock, sales, loans and reports. No separate admin account or workspace selection is required.
 4. Compare the latest sale, stock and customer balance with the expected records before resuming work.
 
-Cloud recovery covers records the server actually acknowledged. A sale that never reached the server, an unfinished draft, or a photo saved only on a lost phone cannot be recovered from Firebase. The cloud projection also excludes local staff credentials, active sessions, uploaded photo bytes and the original command/journal store. Reopening shared POS does not reconstruct those parts of an independent device database.
+Cloud recovery covers records and photos the server actually acknowledged. A sale or photo still waiting to upload, or an unfinished draft on a lost phone, cannot be recovered from Firebase. Logging out preserves queued changes; clearing site data or removing the operating browser profile can destroy them. The cloud projection excludes local staff credentials, offline PIN hashes, active sessions and the original independent command/journal store. Reopening shared POS does not reconstruct those parts of an independent device database.
 
 Keep verified `.hotelbackup` files for complete local recovery. A local backup captures its original workspace at export time; it does not include later changes made only in the shared cloud business. Firebase remains subject to administrative deletion, account access, quotas and service availability. Do not promise absolute zero data loss or unlimited retention.
 
@@ -66,11 +76,11 @@ The app requests persistent storage once after a real workspace opens where supp
 
 Granted persistence protects against automatic storage-pressure eviction. It does not prevent deliberate site-data deletion, profile removal, formatting or device loss. An installed PWA still uses browser-managed site storage rather than a second protected database. Clearing ordinary browsing history and clearing site data are different operations. See [Chrome's persistent storage guidance](https://web.dev/articles/persistent-storage).
 
-For an independent local workspace, the Owner can export an AES-256-GCM password-protected `.hotelbackup` containing records, uploaded photos, credential hashes, journal and drafts. Keep dated copies outside the operating browser, keep passwords separately, and test restoration on an empty spare profile. Shared Settings does not present local backup replacement as a cloud restore. Arrange independent Firebase backups according to the agreed recovery plan.
+For an independent local workspace, the Owner can export an AES-256-GCM password-protected `.hotelbackup` containing records, uploaded photos, credential hashes, journal and drafts. Keep dated copies outside the operating browser, keep passwords separately, and test restoration on an empty spare profile. Shared Settings does not present local backup replacement as a cloud restore. Arrange independent Firebase backups according to the agreed recovery plan, including both business data and the separate private photo storage.
 
 ## Acceptance before handover
 
-Demonstrate a sale and partial loan collection on the shop device, then verify the updated stock, loan balance and report on a second phone using the same POS PIN. Test an interrupted initial upload and recovery after clearing a spare browser. On two shared devices, attempt to sell the final stock unit simultaneously and confirm that it cannot be oversold. During a network outage, confirm that shared work remains a draft and is accepted once after reconnecting.
+Demonstrate a sale and partial loan collection on the shop device, then verify updated stock, loan balance and reports on a second phone. With both devices online, attempt to sell the final stock unit simultaneously and confirm one is rejected. Then disconnect one prepared device, log out, reload and sign in with the same Staff PIN. Add a product using the camera or file picker, change price/cost/stock, sell and print, record an expense and collection, and download reports. Reconnect and verify those exact records and amounts on the other device. Drop one acknowledgement and confirm no duplicate bill or payment appears. Separately test a cleared spare browser and an interrupted first upload; never clear the operating device while changes remain pending.
 
 Keep separate backups and monitor the actual Firebase/Vercel quotas. No plan provides unlimited storage, bandwidth, function invocations or uptime.
 

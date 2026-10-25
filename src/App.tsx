@@ -58,7 +58,7 @@ import {syncLocalProductPhotos} from './lib/media';
 import {flushBeforeAppUpdate} from './lib/update-safety';
 import {sharedCloudSource} from './lib/cloud-shared';
 import {cloudRequest,openAutomaticCloudWorkspace,syncDeviceCloud} from './lib/cloud-sync';
-import {authorizeOfflineSession,clearOfflineSession,getOfflineStatus,offlineSession} from './lib/cloud-offline';
+import {authorizeOfflinePIN,authorizeOfflineSession,clearOfflineSession,getOfflineStatus,hasOfflinePIN,offlineSession,offlineSignIn} from './lib/cloud-offline';
 import {cloudPOSUser} from './lib/cloud-runtime';
 import {requestDevicePersistence} from './lib/local/storage';
 import ConnectivityStatus from './components/ConnectivityStatus';
@@ -910,19 +910,20 @@ function CloudPOSEntry({source}:{source?:string}){
     const remembered=source??uiStorage.getItem('dh-cloud-preferred-source');
     const cached=async()=>{
       if(!remembered||!/^[A-Za-z0-9_-]{1,160}$/.test(remembered))return false;
-      const [user,state]=await Promise.all([offlineSession(remembered),getOfflineStatus(remembered)]);
-      if(!user||!state.ready)return false;
+      const [user,state,hasPIN]=await Promise.all([offlineSession(remembered),getOfflineStatus(remembered),hasOfflinePIN(remembered)]);
+      if((!user&&!hasPIN)||!state.ready)return false;
       if(!active)return true;
       if(!source)location.replace(`/?shared=${encodeURIComponent(remembered)}`);
-      else setAuthenticated(true);
+      else setAuthenticated(Boolean(user)&&uiStorage.getItem(`dh-cloud-lock:${remembered}`)!=='1');
       return true;
     };
     void (async()=>{
       if(navigator.onLine===false){if(!await cached())throw new Error('Open this device once while online before using offline billing.');return;}
+      if(remembered&&uiStorage.getItem(`dh-cloud-lock:${remembered}`)==='1'){if(active)setAuthenticated(false);return;}
       try{
         const value=await cloudRequest<{authenticated:boolean}>('pos-session');
         if(remembered){if(value.authenticated)await authorizeOfflineSession(remembered,cloudPOSUser);else await clearOfflineSession(remembered);}
-        if(active)setAuthenticated(value.authenticated);
+        if(active)setAuthenticated(value.authenticated&&(!remembered||await hasOfflinePIN(remembered)));
       }catch(error){const status=(error as {status?:number}).status;if((!status||status>=500)&&await cached())return;throw error;}
     })().catch(error=>{if(active)setError((error as Error).message);});
     return()=>{active=false;};
@@ -945,12 +946,29 @@ function CloudPOSEntry({source}:{source?:string}){
     return()=>{active=false;};
   },[authenticated,attempt,source]);
   const signIn=async(pin:string)=>{
-    await cloudRequest('pos-login',{pin});
-    if(source)await authorizeOfflineSession(source,cloudPOSUser);
-    if(source){location.reload();return;}
-    opening.current=null;
-    setError('');
-    setAuthenticated(true);
+    const remembered=source??uiStorage.getItem('dh-cloud-preferred-source');
+    if(navigator.onLine===false){
+      if(!remembered)throw new Error('Sign in once while online to prepare offline access.');
+      await offlineSignIn(remembered,pin);
+      uiStorage.removeItem(`dh-cloud-lock:${remembered}`);
+      if(source)location.reload();else location.replace(`/?shared=${encodeURIComponent(remembered)}`);
+      return;
+    }
+    try{await cloudRequest('pos-login',{pin});}
+    catch(error){
+      const status=(error as {status?:number}).status;
+      if(remembered&&(!status||status>=500)&&await hasOfflinePIN(remembered)){
+        await offlineSignIn(remembered,pin);uiStorage.removeItem(`dh-cloud-lock:${remembered}`);
+        location.replace(`/?shared=${encodeURIComponent(remembered)}`);return;
+      }
+      throw error;
+    }
+    const workspace=source??await openAutomaticCloudWorkspace();
+    if(!workspace)throw new Error('Your shop data is still connecting. Keep this device online and try again.');
+    await authorizeOfflinePIN(workspace,pin,cloudPOSUser);
+    uiStorage.removeItem(`dh-cloud-lock:${workspace}`);
+    uiStorage.setItem('dh-cloud-preferred-source',workspace);
+    location.replace(`/?shared=${encodeURIComponent(workspace)}`);
   };
   if(authenticated===false)return <Login cloudLogin={signIn}/>;
   if(error)return <div className="boot-error panel"><h2>Let’s reconnect your workspace.</h2><p role="alert">{error}</p><button className="button button-primary" onClick={()=>setAttempt(value=>value+1)}><RefreshCw size={14}/> Try again</button></div>;

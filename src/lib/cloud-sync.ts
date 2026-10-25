@@ -29,7 +29,7 @@ function sanitize(value:unknown):unknown {
   if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).filter(([name])=>!['pin','password','salt','hash','token','private_key','__proto__','constructor','prototype'].includes(name.toLowerCase())).map(([name,item])=>[name,name==='image'&&typeof item==='string'&&item.startsWith('/api/media/')?'':sanitize(item)]));
   return value;
 }
-export function monitoringChanges(rows:LocalChange[]):CloudChange[]{return rows.filter(row=>kinds.has(row.kind)).map(row=>({...row,kind:row.kind as CloudChange['kind'],value:sanitize(row.value) as Record<string,unknown>}));}
+export function monitoringChanges(rows:LocalChange[]):CloudChange[]{return rows.filter(row=>row.kind!=='media'&&kinds.has(row.kind)).map(row=>({...row,kind:row.kind as CloudChange['kind'],value:sanitize(row.value) as Record<string,unknown>}));}
 export function cloudChunks(rows:CloudChange[],limit=550000):CloudChange[][] {
   const chunks:CloudChange[][]=[];let current:CloudChange[]=[],size=2;
   for(const row of rows){const bytes=new TextEncoder().encode(JSON.stringify(row)).length+1;

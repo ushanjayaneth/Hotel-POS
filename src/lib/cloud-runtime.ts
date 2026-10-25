@@ -1,7 +1,7 @@
 import type {Snapshot,User} from '../../shared/types';
 import type {OfflineCloudState} from '../../shared/offline-cloud';
 import {cloudRequest} from './cloud-sync';
-import {authorizeOfflineSession,cacheCloudState,clearOfflineSession,getOfflineStatus,isCloudOfflineMutation,markCloudCommandOffline,offlineApi,offlineSession,rollbackCloudCommand,syncCloudOutbox,withCloudOfflineLock} from './cloud-offline';
+import {authorizeOfflinePIN,authorizeOfflineSession,cacheCloudState,clearOfflineSession,getOfflineStatus,isCloudOfflineMutation,markCloudCommandOffline,offlineApi,offlineSession,offlineSignIn,rollbackCloudCommand,syncCloudOutbox,withCloudOfflineLock} from './cloud-offline';
 
 export const cloudPOSUser:User={id:'cloud-owner',name:'Administrator',initials:'A',role:'owner',branchId:null};
 type CloudSnapshot=Snapshot&{cloudVersion?:number;notModified?:boolean;offlineState?:OfflineCloudState};
@@ -46,9 +46,14 @@ async function bootstrapCloud(sourceId:string,url:URL):Promise<Snapshot>{
     }
     if(!result.offlineState)throw Object.assign(new Error('Reload the updated website to prepare offline billing.'),{status:503});
     const applied=await cacheCloudState(sourceId,result.offlineState,result.user??cloudPOSUser);
+    if(!applied){
+      // Another tab may already have newer records, even with no queued writes.
+      // Keep that replica visible and request a complete snapshot next time.
+      snapshots.delete(key);
+      return localSnapshot(sourceId,url.pathname+url.search,true);
+    }
     const {offlineState:_,...snapshot}=result;
     snapshots.set(key,snapshot);
-    if(!applied&&(await getOfflineStatus(sourceId)).pending)return localSnapshot(sourceId,url.pathname+url.search,true);
     const status=await getOfflineStatus(sourceId);
     return decorate(snapshot,true,status.pending,status.lastError,status.lastSync);
   }catch(error){
@@ -63,6 +68,7 @@ export async function cloudRuntimeApi<T>(sourceId:string,path:string,body?:unkno
   const url=new URL(path.replace(/^\/api(?=\/)/,''),'https://workspace');
   const method=(inputMethod??(body===undefined?'GET':'POST')).toUpperCase();
   if(url.pathname==='/session'){
+    try{if(localStorage.getItem(`dh-cloud-lock:${sourceId}`)==='1')return {user:null,demo:false} as T;}catch{/* Optional preference storage. */}
     if(!online())return {user:await offlineSession(sourceId),demo:false} as T;
     try{
       const result=await transport<{authenticated:boolean}>('pos-session');
@@ -72,12 +78,20 @@ export async function cloudRuntimeApi<T>(sourceId:string,path:string,body?:unkno
     }catch(error){if(retryable(error))return {user:await offlineSession(sourceId),demo:false} as T;throw error;}
   }
   if(url.pathname==='/login'){
-    await transport('pos-login',body);await authorizeOfflineSession(sourceId,cloudPOSUser);
+    const pin=String((body as {pin?:string})?.pin??'');
+    if(!online()){
+      const user=await offlineSignIn(sourceId,pin);
+      try{localStorage.removeItem(`dh-cloud-lock:${sourceId}`);}catch{/* Optional preference storage. */}
+      return {user,demo:false} as T;
+    }
+    await transport('pos-login',body);await authorizeOfflinePIN(sourceId,pin,cloudPOSUser);
+    try{localStorage.removeItem(`dh-cloud-lock:${sourceId}`);}catch{/* Optional preference storage. */}
     return {user:cloudPOSUser,demo:false} as T;
   }
   if(url.pathname==='/logout'){
-    if(online())await transport('pos-logout',{});
+    if(online())try{await transport('pos-logout',{});}catch(error){if(!retryable(error))throw error;}
     await clearOfflineSession(sourceId);
+    try{localStorage.setItem(`dh-cloud-lock:${sourceId}`,'1');}catch{/* Cached authorization is still cleared. */}
     snapshots.clear();location.href='/';return {ok:true} as T;
   }
   if(url.pathname==='/bootstrap')return withCloudOfflineLock(sourceId,()=>bootstrapCloud(sourceId,url)) as Promise<T>;

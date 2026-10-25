@@ -1,7 +1,7 @@
 /** Device-isolated read-only monitoring. Admin credentials never use this contract. */
 export const CLOUD_MONITOR_PATH = '/api/cloud';
 export const CLOUD_MONITOR_MAX_BYTES = 700_000;
-export const CLOUD_MONITOR_KINDS = ['category', 'menu', 'recipe', 'branch', 'settings', 'inventory', 'table', 'order', 'held', 'credit', 'customer', 'supplier', 'purchase', 'production', 'expense', 'shift', 'movement', 'audit', 'staff', 'refund'] as const;
+export const CLOUD_MONITOR_KINDS = ['category', 'menu', 'recipe', 'branch', 'settings', 'inventory', 'table', 'order', 'held', 'credit', 'customer', 'supplier', 'purchase', 'production', 'expense', 'shift', 'movement', 'audit', 'staff', 'refund', 'media'] as const;
 export type CloudKind = typeof CLOUD_MONITOR_KINDS[number];
 export interface CloudChange {kind: CloudKind; id: string; branchId: string | null; value: Record<string, unknown>}
 export interface CloudSource {

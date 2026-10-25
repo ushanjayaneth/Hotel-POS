@@ -4,6 +4,7 @@ import {CLOUD_MONITOR_KINDS,CLOUD_MONITOR_MAX_BYTES,type CloudSource,type CloudC
 import {firebaseMonitorStore,recordKey,type MonitorStore,type Projection} from './store.js';
 import {monitorBootstrap,monitorCommand} from './engine.js';
 import {applyOfflineCommit,offlineCloudState,offlineCommitSchema} from './offline.js';
+import {assertMediaPayload,isMediaId,type MediaRecord} from '../../shared/media.js';
 
 const id=z.string().regex(/^[A-Za-z0-9_-]{1,160}$/);
 const change=z.object({kind:z.enum(CLOUD_MONITOR_KINDS),id:z.string().min(1).max(160),branchId:z.string().max(160).nullable(),value:z.record(z.string(),z.unknown())}).strict();
@@ -113,7 +114,7 @@ export function createMonitorHandler(options:MonitorOptions={}) {
           const timestamp=now();await store.touch(sourceId,timestamp);return reply({lastSeenAt:timestamp,shared:Boolean(source?.shared)});
         }
         const input=action==='push'?push.parse(body):null;
-        if(input)for(const row of input.changes){check(row.value.id===row.id||row.kind==='settings','Cloud record ID mismatch.');validateData(row.value);}
+        if(input)for(const row of input.changes){check(row.kind!=='media','Product photo uploads require authenticated shared POS.',403,'SHARED_MEDIA_REQUIRED');check(row.value.id===row.id||row.kind==='settings','Cloud record ID mismatch.');validateData(row.value);}
         for(let attempt=0;attempt<6;attempt++){
           const projection=await store.get(sourceId);
           check(projection&&!projection.source.revoked&&projection.source.epoch===epoch,'This device connection was revoked.',401,'DEVICE_REVOKED');
@@ -213,6 +214,14 @@ export function createMonitorHandler(options:MonitorOptions={}) {
         return reply({sourceId:input.sourceId,epoch,token:sign({purpose:'owner-paired-writer-v3',sourceId:input.sourceId,epoch,version:version(),exp:Date.now()+365*86400000})});
       }
       const sourceId=id.parse(url.searchParams.get('sourceId')??body.sourceId);
+      if(action==='media'&&method==='GET'){
+        const photoId=url.searchParams.get('id');check(isMediaId(photoId),'Photo not found.',404,'PHOTO_NOT_FOUND');
+        const projection=await store.get(sourceId);
+        check(projection?.source.shared&&projection.source.ready&&!projection.source.revoked,'Workspace not found.',404);
+        check(store.getMedia,'Cloud product photos are unavailable on this server.',503);
+        const media=await store.getMedia!(sourceId,photoId!);check(media,'Photo not found.',404,'PHOTO_NOT_FOUND');
+        assertMediaPayload(media);return reply({media});
+      }
       if(action==='snapshot'&&method==='GET'){
         const projection=await store.get(sourceId);check(projection&&!projection.source.revoked,'Workspace not found.',404);
         check(projection!.source.ready,'The initial device upload is still in progress.',409,'INITIAL_UPLOAD_PENDING');
@@ -233,6 +242,7 @@ export function createMonitorHandler(options:MonitorOptions={}) {
         // offline-completed. The immutable effects still identify one receipt.
         const {offline:_offline,...identity}=input;
         const key=recordKey('offline-command',JSON.stringify([input.deviceId,input.transactionId])),digest=hash(stable(identity));
+        const savedPhotos=new Set<string>();
         for(let attempt=0;attempt<6;attempt++){
           const projection=await store.get(sourceId);
           check(projection?.source.shared&&projection.source.ready&&!projection.source.revoked,'The shared workspace is unavailable. The transaction remains saved on this device.',409,'WORKSPACE_UNAVAILABLE');
@@ -242,6 +252,12 @@ export function createMonitorHandler(options:MonitorOptions={}) {
             await store.publish(projection!.source);return reply(prior.response);
           }
           const next=structuredClone(projection!),result=applyOfflineCommit(next,input);
+          for(const effect of input.changes.filter(value=>value.kind==='media'&&value.after&&!savedPhotos.has(value.id))){
+            check(store.putMedia,'Cloud product photos are unavailable on this server.',503);
+            const photo=assertMediaPayload(effect.after),record:MediaRecord={...photo,branchId:null,createdAt:typeof effect.after!.createdAt==='string'?effect.after!.createdAt:input.createdAt};
+            check(await store.putMedia!(sourceId,record),'This photo ID already belongs to a different image.',409,'PHOTO_CONFLICT');
+            savedPhotos.add(effect.id);
+          }
           next.source.updatedAt=now();next.source.lastSeenAt=now();next.revision++;
           next.source.dataVersion=(next.source.dataVersion??0)+1;
           const response={...result,cloudVersion:next.source.dataVersion};
