@@ -304,6 +304,7 @@ export default function Management({ page }: { page: Page }) {
     null,
   );
   const [collectionAmount, setCollectionAmount] = useState('');
+  const [collectionMethod, setCollectionMethod] = useState('cash');
   const [reportFrom, setReportFrom] = useState(dayKey(data.serverTime));
   const [reportTo, setReportTo] = useState(dayKey(data.serverTime));
   const [busy, setBusy] = useState(false);
@@ -318,6 +319,11 @@ export default function Management({ page }: { page: Page }) {
   const [productionMenuId, setProductionMenuId] = useState("");
   const [productionQuantity, setProductionQuantity] = useState("10");
   const [settings, setSettings] = useState<Settings>(data.settings);
+  const settingsChanges=useRef<Partial<Settings>>({});
+  const editSettings=(next:Settings)=>{
+    settingsChanges.current={...settingsChanges.current,...Object.fromEntries(Object.entries(next).filter(([key,value])=>value!==settings[key as keyof Settings]))};
+    setSettings(next);
+  };
   useEffect(() => {
     setSearch("");
     setCategory("all");
@@ -325,7 +331,7 @@ export default function Management({ page }: { page: Page }) {
     setError("");
   }, [page, branchId]);
   useEffect(() => {
-    setSettings(data.settings);
+    setSettings({...data.settings,...settingsChanges.current});
   }, [data.settings]);
   const branch =
     data.branches.find((branch) => branch.id === branchId) || data.branch;
@@ -393,7 +399,7 @@ export default function Management({ page }: { page: Page }) {
   const open = (next: Dialog) => {
     setError("");
     setFormCommandId(commandId());
-    if(next === 'customer-ledger')setCollectionAmount('');
+    if(next === 'customer-ledger'){setCollectionAmount('');setCollectionMethod(activeShift?'cash':'card');}
     setDialog(next);
   };
   const close = () => {
@@ -2546,8 +2552,13 @@ export default function Management({ page }: { page: Page }) {
               onSubmit={(event) =>
                 submit(
                   event,
-                  () =>
-                    mutate("/settings", { ...settings, language: "en" }, "PUT"),
+                  async () => {
+                    const submittedChanges:Partial<Settings>={...settingsChanges.current,language:"en"};
+                    const saved=await mutate<{settings:Settings}>("/settings", submittedChanges, "PUT");
+                    // Keep edits made while this save and its refresh were pending.
+                    settingsChanges.current=Object.fromEntries(Object.entries(settingsChanges.current).filter(([key,value])=>value!==submittedChanges[key as keyof Settings]));
+                    setSettings({...saved.settings,...settingsChanges.current});return saved;
+                  },
                   "Business settings saved",
                 )
               }
@@ -2571,7 +2582,7 @@ export default function Management({ page }: { page: Page }) {
                     maxLength={100}
                     value={settings.businessName}
                     onChange={(event) =>
-                      setSettings({
+                      editSettings({
                         ...settings,
                         businessName: event.target.value,
                       })
@@ -2584,7 +2595,7 @@ export default function Management({ page }: { page: Page }) {
                     maxLength={160}
                     value={settings.tagline}
                     onChange={(event) =>
-                      setSettings({ ...settings, tagline: event.target.value })
+                      editSettings({ ...settings, tagline: event.target.value })
                     }
                   />
                 </Field>
@@ -2598,7 +2609,7 @@ export default function Management({ page }: { page: Page }) {
                     required
                     value={settings.taxRate}
                     onChange={(event) =>
-                      setSettings({
+                      editSettings({
                         ...settings,
                         taxRate: Number(event.target.value),
                       })
@@ -2615,7 +2626,7 @@ export default function Management({ page }: { page: Page }) {
                     required
                     value={settings.serviceChargeRate}
                     onChange={(event) =>
-                      setSettings({
+                      editSettings({
                         ...settings,
                         serviceChargeRate: Number(event.target.value),
                       })
@@ -2640,7 +2651,7 @@ export default function Management({ page }: { page: Page }) {
                     maxLength={300}
                     value={settings.receiptFooter}
                     onChange={(event) =>
-                      setSettings({
+                      editSettings({
                         ...settings,
                         receiptFooter: event.target.value,
                       })
@@ -2661,7 +2672,7 @@ export default function Management({ page }: { page: Page }) {
                     role="switch"
                     checked={settings.lowStockAlerts}
                     onChange={(event) =>
-                      setSettings({
+                      editSettings({
                         ...settings,
                         lowStockAlerts: event.target.checked,
                       })
@@ -2682,7 +2693,7 @@ export default function Management({ page }: { page: Page }) {
                     role="switch"
                     checked={settings.autoPrint}
                     onChange={(event) =>
-                      setSettings({
+                      editSettings({
                         ...settings,
                         autoPrint: event.target.checked,
                       })
@@ -4075,7 +4086,9 @@ export default function Management({ page }: { page: Page }) {
                       <select
                         className="select"
                         name="method"
-                        defaultValue={activeShift ? "cash" : "card"}
+                        value={collectionMethod}
+                        disabled={busy}
+                        onChange={event=>setCollectionMethod(event.target.value)}
                       >
                         <option value="cash" disabled={!activeShift}>
                           Cash{!activeShift ? " — open a cash shift first" : ""}
@@ -4084,10 +4097,12 @@ export default function Management({ page }: { page: Page }) {
                         <option value="qr">QR / bank payment</option>
                       </select>
                     </Field>
-                    <Field label="Reference (optional)">
+                    <Field label={collectionMethod==='cash'?'Reference (optional)':'Approved payment reference'}>
                       <input
                         className="input"
                         name="reference"
+                        required={collectionMethod!=='cash'}
+                        disabled={busy}
                         maxLength={120}
                         placeholder="Bank or card reference"
                       />

@@ -29,6 +29,7 @@ function validateData(value:unknown,depth=0):void {
 export interface MonitorOptions {store?:MonitorStore;env?:NodeJS.ProcessEnv}
 export function createMonitorHandler(options:MonitorOptions={}) {
   const env=options.env??process.env;
+  const posSessionSeconds=365*86400;
   const scryptFormat=/^scrypt\$[a-fA-F0-9]{64}\$[a-fA-F0-9]{128}$/;
   const pinFormat=/^[0-9]{6,16}$/;
   const posPinConfigured=()=>env.CLOUD_POS_PIN_HASH?scryptFormat.test(env.CLOUD_POS_PIN_HASH):pinFormat.test(env.CLOUD_POS_PIN??'');
@@ -47,14 +48,14 @@ export function createMonitorHandler(options:MonitorOptions={}) {
   };
   const verify=(token:string,purpose:string):Record<string,any>|null=>{
     try{const [text,signature,...rest]=token.split('.');if(rest.length||!text||!signature||!constant(signature,createHmac('sha256',env.CLOUD_SESSION_SECRET!).update(text).digest('base64url')))return null;
-      const value=JSON.parse(Buffer.from(text,'base64url').toString());return value.purpose===purpose&&value.exp>Date.now()&&value.version===version()?value:null;
+      const value=JSON.parse(Buffer.from(text,'base64url').toString());return value.purpose===purpose&&typeof value.exp==='number'&&Number.isFinite(value.exp)&&value.exp>Date.now()&&value.version===version()?value:null;
     }catch{return null;}
   };
-  const authenticated=(request:Request)=>{
+  const authentication=(request:Request)=>{
     const cookie=request.headers.get('cookie')?.split(';').map(part=>part.trim()).find(part=>part.startsWith('hotel-cloud='))?.slice(12)??'';
-    return Boolean(verify(cookie,'owner')||(posPinConfigured()&&verify(cookie,'pos-owner-v1')));
+    return verify(cookie,'owner')||(posPinConfigured()?verify(cookie,'pos-owner-v1'):null);
   };
-  const owner=(request:Request)=>check(authenticated(request),'Sign in to your POS.',401,'UNAUTHENTICATED');
+  const owner=(request:Request)=>{const session=authentication(request);check(session,'Sign in to your POS.',401,'UNAUTHENTICATED');return session!;};
   const scryptValid=(input:string,encoded:string)=>{
     try{if(!scryptFormat.test(encoded))return false;const [,salt,digest]=encoded.split('$');return constant(scryptSync(input,Buffer.from(salt,'hex'),64).toString('hex'),digest.toLowerCase());}catch{return false;}
   };
@@ -68,6 +69,15 @@ export function createMonitorHandler(options:MonitorOptions={}) {
     const reply=(value:unknown,status=200)=>new Response(JSON.stringify(value),{status,headers});
     try{
       const url=new URL(request.url),action=url.searchParams.get('action')??'status',method=request.method.toUpperCase();
+      const rememberPos=()=>{
+        const expires=Date.now()+posSessionSeconds*1000;
+        headers['Set-Cookie']=`hotel-cloud=${sign({purpose:'pos-owner-v1',version:version(),exp:expires})}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${posSessionSeconds}; Expires=${new Date(expires).toUTCString()}${url.protocol==='https:'?'; Secure':''}`;
+      };
+      const renewPos=(session:Record<string,any>|null)=>{
+        // Refresh at most daily, including upgrading still-valid 12-hour POS
+        // cookies, without rewriting the cookie on every background poll.
+        if(session?.purpose==='pos-owner-v1'&&session.exp<=Date.now()+(posSessionSeconds-86400)*1000)rememberPos();
+      };
       if(action==='status'&&method==='GET')return reply({configured:missing().length===0,missing:missing(),posPinConfigured:posPinConfigured()});
       if(missing().length)return reply({error:'Cloud monitoring is not configured on this server.',code:'CLOUD_NOT_CONFIGURED',missing:missing()},503);
       check(/^[A-Za-z0-9_-]{1,80}$/.test(env.CLOUD_TENANT_ID??'hotel'),'Invalid cloud tenant configuration.',503);
@@ -84,7 +94,7 @@ export function createMonitorHandler(options:MonitorOptions={}) {
         check(await store.rate('pos-login-global',150,15*60000),'Too many PIN attempts. Try again later.',429,'RATE_LIMITED');
         check(await store.rate(`pos-login-${ip}`,12,15*60000),'Too many PIN attempts. Try again later.',429,'RATE_LIMITED');
         check(pinValid(input.pin),'The POS PIN is incorrect.',401,'INVALID_CREDENTIALS');
-        headers['Set-Cookie']=`hotel-cloud=${sign({purpose:'pos-owner-v1',version:version(),exp:Date.now()+12*3600000})}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200${url.protocol==='https:'?'; Secure':''}`;
+        rememberPos();
         return reply({ok:true});
       }
       if(action==='login'&&method==='POST'){
@@ -97,8 +107,12 @@ export function createMonitorHandler(options:MonitorOptions={}) {
         headers['Set-Cookie']=`hotel-cloud=${sign({purpose:'owner',version:version(),exp:Date.now()+12*3600000})}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200${url.protocol==='https:'?'; Secure':''}`;
         return reply({ok:true});
       }
-      if(['session','pos-session'].includes(action)&&method==='GET')return reply({authenticated:authenticated(request)});
-      if(['logout','pos-logout'].includes(action)&&method==='POST'){headers['Set-Cookie']=`hotel-cloud=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${url.protocol==='https:'?'; Secure':''}`;return reply({ok:true});}
+      if(['session','pos-session'].includes(action)&&method==='GET'){
+        const session=authentication(request);
+        renewPos(session);
+        return reply({authenticated:Boolean(session)});
+      }
+      if(['logout','pos-logout'].includes(action)&&method==='POST'){headers['Set-Cookie']=`hotel-cloud=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT${url.protocol==='https:'?'; Secure':''}`;return reply({ok:true});}
       if(['push','heartbeat'].includes(action)&&method==='POST'){
         const bearer=request.headers.get('authorization')?.replace(/^Bearer /,'')??'';
         // Earlier writer purposes were issued by an unsafe anonymous endpoint.
@@ -145,7 +159,10 @@ export function createMonitorHandler(options:MonitorOptions={}) {
         }
         fail('Another device changed this workspace. Refresh and try again.',409,'CLOUD_BUSY');
       }
-      owner(request);
+      const session=owner(request);
+      // Active trusted browsers keep their POS access; only a verified, current
+      // PIN session can renew. Legacy owner sessions retain their 12-hour limit.
+      renewPos(session);
       if(action==='workspace'&&method==='POST'){
         const input=z.object({create:z.boolean().default(false)}).strict().parse(body);
         // An old heartbeat could leave an unindexed main-store shell with no

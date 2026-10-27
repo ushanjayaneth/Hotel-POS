@@ -246,7 +246,10 @@ test('shared POS prints and retains an offline bill, then merges it once after a
     });
     await recoverConnection(counter,page);
     await expect.poll(()=>lostAcknowledgement,{timeout:20000}).toBe(true);
-    await expect.poll(async()=>paidOrders((await store.get(source.sourceId))!).length,{timeout:20000}).toBe(2);
+    // The first successful commit can lose its response before the dependent
+    // payment uploads. Allow the 15 s retry cooldown and next 5 s poll to replay
+    // that same command, then finish the payment without a manual refresh.
+    await expect.poll(async()=>paidOrders((await store.get(source.sourceId))!).length,{timeout:40000}).toBe(2);
     // Reconnect again after the committed response was lost: the durable queue
     // must replay the same identity rather than producing a second sale.
     await counter.setOffline(true);await recoverConnection(counter,page);
@@ -345,6 +348,108 @@ test('cash paid now and the remaining loan stay separate through offline checkou
     expect(Object.values(cloud.records).find(row=>row.kind==='shift'&&row.value.status==='open')!.value.expectedCash).toBe(openingCash+65000);
     await refreshPhone(remote);await navigate(remote,'Reports');
     await expect(remote.getByLabel('Outstanding customer loans',{exact:true})).toHaveText('Rs. 0.00');
+    expect(errors).toEqual([]);
+  }finally{await counter.close();await phone.close();await app.close();}
+});
+
+test('offline card and QR records, customer loans and electronic repayments persist and sync without adding drawer cash',async({browser})=>{
+  const {store,app,counter,phone,page,remote,source,errors}=await openSharedShop(browser);
+  try{
+    const before=(await store.get(source.sourceId))!;
+    const openingCash=Object.values(before.records).find(row=>row.kind==='shift'&&row.value.status==='open')!.value.expectedCash;
+    await counter.setOffline(true);
+    for(const method of ['Card','QR / Bank']){
+      await page.getByRole('button',{name:'Add Chicken rice & curry',exact:true}).click();
+      await page.getByRole('button',{name:'Charge order',exact:true}).click();
+      const payment=page.getByRole('dialog',{name:'Take payment',exact:true});
+      await payment.getByRole('button',{name:method,exact:true}).click();
+      await payment.getByRole('textbox',{name:'Terminal / bank reference',exact:true}).fill(`APPROVED-${method==='Card'?'CARD':'QR'}-001`);
+      await payment.getByRole('checkbox').check();
+      await payment.getByRole('button',{name:'Confirm payment',exact:true}).click();
+      const receipt=page.getByRole('dialog',{name:'Order receipt',exact:true});
+      await expect(receipt).toContainText(method==='Card'?'CARD':'QR');
+      await receipt.getByRole('button',{name:'Print receipt',exact:true}).click();
+      await receipt.getByRole('button',{name:'Close',exact:true}).click();
+      await page.reload();await expect(page.getByRole('heading',{level:1,name:/Point of sale/})).toBeVisible();
+    }
+    await page.getByRole('button',{name:'Add Chicken rice & curry',exact:true}).click();
+    await page.getByRole('button',{name:/^Customer Loan/}).click();
+    const customer=page.getByRole('dialog',{name:'Customer Loan',exact:true});
+    await customer.getByRole('button',{name:'New customer',exact:true}).click();
+    await customer.getByLabel('Customer name',{exact:true}).fill('Offline Electronic Guest');
+    await customer.getByLabel('Phone number',{exact:true}).fill('0770102030');
+    await customer.getByRole('button',{name:'Continue to loan',exact:true}).click();
+    const payment=page.getByRole('dialog',{name:'Take payment',exact:true});
+    await payment.getByRole('checkbox').check();await payment.getByRole('button',{name:'Confirm customer loan',exact:true}).click();
+    await page.getByRole('dialog',{name:'Order receipt',exact:true}).getByRole('button',{name:'Close',exact:true}).click();
+    await navigate(page,'Customers & dues');
+    const row=page.getByRole('row').filter({hasText:'Offline Electronic Guest'});
+    for(const [method,amount,balance] of [['card','200','450.00'],['qr','100','350.00']]){
+      await row.getByRole('button',{name:'Ledger & collect',exact:true}).click();
+      const ledger=page.getByRole('dialog',{name:'Customer ledger & collection',exact:true});
+      await ledger.getByRole('spinbutton',{name:'Amount received (LKR)',exact:true}).fill(amount);
+      await ledger.getByRole('combobox',{name:'Payment method',exact:true}).selectOption(method);
+      const reference=ledger.getByRole('textbox',{name:'Approved payment reference',exact:true});
+      await expect(reference).toHaveAttribute('required','');
+      await reference.fill(`APPROVED-REPAYMENT-${method}`);
+      await ledger.getByRole('button',{name:'Record collection',exact:true}).click();
+      await expect(ledger).toHaveCount(0);await expect(row.locator('td').nth(4)).toHaveText(`Rs. ${balance}`);
+    }
+    await page.reload();await expect(row.locator('td').nth(4)).toHaveText('Rs. 350.00');
+    expect(paidOrders((await store.get(source.sourceId))!)).toHaveLength(0);
+    await recoverConnection(counter,page);
+    await expect.poll(async()=>paidOrders((await store.get(source.sourceId))!).length,{timeout:30000}).toBe(3);
+    await expect.poll(async()=>Object.values((await store.get(source.sourceId))!.records).find(row=>row.kind==='customer'&&row.value.name==='Offline Electronic Guest')?.value.balance,{timeout:30000}).toBe(35000);
+    const saved=(await store.get(source.sourceId))!;
+    expect(Object.values(saved.records).find(row=>row.kind==='shift'&&row.value.status==='open')!.value.expectedCash).toBe(openingCash);
+    expect(new Set(paidOrders(saved).flatMap(order=>order.payments.map(payment=>payment.method)))).toEqual(new Set(['card','qr','credit']));
+    expect(await page.evaluate(key=>localStorage.getItem(key),printCounter)).toBe('2');
+    await refreshPhone(remote);await navigate(remote,'Customers & dues');
+    await expect(remote.getByRole('row').filter({hasText:'Offline Electronic Guest'}).locator('td').nth(4)).toHaveText('Rs. 350.00');
+    expect(errors).toEqual([]);
+  }finally{await counter.close();await phone.close();await app.close();}
+});
+
+test('a stalled cloud connection does not hold up cached products, bills, reports or a prepared browser restart',async({browser})=>{
+  const {store,app,counter,phone,page,remote,source,errors}=await openSharedShop(browser);
+  let unavailable=true,attempts=0,stalled=false;
+  try{
+    await page.route('**/api/cloud?**',async route=>{
+      if(!unavailable){await route.continue();return;}
+      attempts++;
+      if(!stalled){stalled=true;await new Promise(resolve=>setTimeout(resolve,10000));}
+      await route.abort('internetdisconnected').catch(()=>{});
+    });
+    expect(await page.evaluate(()=>navigator.onLine)).toBe(true);
+    const start=Date.now();
+    await page.getByRole('button',{name:'Refresh workspace',exact:true}).click();
+    await expect(page.locator('.notice-banner')).toContainText('Working offline',{timeout:5000});
+    expect(Date.now()-start).toBeLessThan(5000);
+    const firstAttempts=attempts;
+    await page.getByRole('button',{name:'Add product',exact:true}).click();
+    const product=page.getByRole('dialog',{name:'Add product',exact:true});
+    await product.getByLabel('Product name',{exact:true}).fill('No Internet Product');
+    await product.getByRole('combobox',{name:/^Stock tracking/}).selectOption('untracked');
+    await product.getByLabel('Selling price (LKR)',{exact:true}).fill('100');
+    await product.getByLabel('Cost per unit (LKR)',{exact:true}).fill('40');
+    await product.getByRole('button',{name:'Add product',exact:true}).click();await expect(product).toHaveCount(0);
+    await page.getByRole('button',{name:'Add No Internet Product',exact:true}).click();
+    await page.getByRole('button',{name:'Charge order',exact:true}).click();
+    const payment=page.getByRole('dialog',{name:'Take payment',exact:true});
+    await payment.getByRole('button',{name:'Confirm payment',exact:true}).click();
+    await page.getByRole('dialog',{name:'Order receipt',exact:true}).getByRole('button',{name:'Close',exact:true}).click();
+    await navigate(page,'Reports');
+    const download=page.waitForEvent('download');await page.getByRole('button',{name:'Profit CSV',exact:true}).click();await download;
+    expect(attempts).toBe(firstAttempts);
+    await page.reload();
+    await expect(page.getByRole('heading',{level:1,name:/Reports/})).toBeVisible({timeout:5000});
+    await expect(page.getByLabel('Staff PIN',{exact:true})).toHaveCount(0);
+    expect(paidOrders((await store.get(source.sourceId))!)).toHaveLength(0);
+    unavailable=false;
+    await page.getByRole('button',{name:'Refresh workspace',exact:true}).click();
+    await expect.poll(async()=>paidOrders((await store.get(source.sourceId))!).length,{timeout:30000}).toBe(1);
+    await refreshPhone(remote);await navigate(remote,'Products');
+    await expect(remote.getByRole('row').filter({hasText:'No Internet Product'})).toContainText('100.00');
     expect(errors).toEqual([]);
   }finally{await counter.close();await phone.close();await app.close();}
 });

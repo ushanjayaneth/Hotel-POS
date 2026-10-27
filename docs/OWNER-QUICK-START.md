@@ -11,6 +11,8 @@ Keep the completed [customer handover record](CUSTOMER-HANDOVER.md), the trusted
 
 First setup, a device's first verified PIN entry and app caching need an online connection. Afterwards, the website works directly in the same browser; downloading/installing an app is optional. Logging out keeps the prepared offline PIN, saved records and unsynced bills. Test offline logout, sign-in and billing before relying on the device. Settings offers **Install app** where supported; the browser may also provide an install/add-to-home-screen menu. Installation does not create an independent backup or prevent site-data clearing. The app requests persistent storage once where supported, remembers refusals and offers a manual retry in Settings. The permission protects against automatic eviction, not deliberate deletion, formatting or device loss.
 
+Closing the shared POS, locking the phone or installing an app update keeps this browser signed in. Use **Sign out** when you want to lock it. Sign out, cleared site data, a new browser/device, a changed PIN or a session expired after long inactivity requires the PIN again; closing the app alone does not.
+
 ## Before opening the till
 
 1. Check the correct branch/workspace and today's opening stock. Review low-stock items and any unfinished bills.
@@ -37,6 +39,8 @@ Use **Hold bill** to return to an unfinished basket. A held bill does not reserv
 5. When money is received, enter only the amount actually paid and the payment method. The amount starts blank. Check **Repayment preview**: it shows the current loan, this payment and the remaining loan before saving. **Pay in full** fills the entire balance only when selected explicitly. Cash collections need an open cash shift.
 
 Customers may pay in parts: collecting LKR 300 against LKR 1,000 leaves LKR 700. Record the next instalment when received. Each collection keeps its own history; never enter the original sale again to record a repayment.
+
+For Card or QR / bank collections, enter the **Approved payment reference** from the completed external payment. Cash references are optional. These records can be saved offline; they do not charge or verify an external bank/terminal automatically.
 
 ## Products, stock, and profit
 
@@ -65,6 +69,7 @@ Periodically test a device backup through **Restore device backup** in an empty 
 - For a printer problem, check the saved sale in history and reprint after fixing the printer. Avoid a duplicate sale.
 - For an internet outage, a cached device workspace can keep working. A shared-hub installation can keep working while its hub and LAN remain available; a hub-disconnected device can retain drafts but cannot confirm hub transactions.
 - In shared cloud mode, sign in with the same Staff PIN and continue billing and printing from the prepared offline cache. If you logged out, the verified offline PIN still works; a first visit or cleared browser must connect and verify it online once. Bills and payments save on this device first. Keep the app open after reconnecting until the pending counter clears; verify a recent bill and balance on another device. Do not clear site data while uploads are pending. Two disconnected tills cannot see each other's stock; review any shortage or edit-conflict warning after sync.
+- If Wi-Fi is connected but the cloud cannot be reached, the prepared workspace continues locally and retries in the background. **Refresh workspace** requests an immediate retry after the connection recovers.
 - For a storage/save error, stop repeated checkout attempts, keep any unsaved details, check the saved history, free space or contact support, and retry only after confirming the previous result. Do not clear site data to fix storage.
 - For lost records or a damaged device, preserve the device and latest backup; contact the named support person before replacing or resetting data.
 

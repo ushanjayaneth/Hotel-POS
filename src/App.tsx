@@ -59,7 +59,7 @@ import {flushBeforeAppUpdate} from './lib/update-safety';
 import {sharedCloudSource} from './lib/cloud-shared';
 import {cloudRequest,openAutomaticCloudWorkspace,syncDeviceCloud} from './lib/cloud-sync';
 import {authorizeOfflinePIN,authorizeOfflineSession,clearOfflineSession,getOfflineStatus,hasOfflinePIN,offlineSession,offlineSignIn} from './lib/cloud-offline';
-import {cloudPOSUser} from './lib/cloud-runtime';
+import {cloudPOSUser,cloudRuntimeApi,retryCloudConnection} from './lib/cloud-runtime';
 import {requestDevicePersistence} from './lib/local/storage';
 import ConnectivityStatus from './components/ConnectivityStatus';
 
@@ -530,7 +530,7 @@ function WorkspaceApp() {
     const interval = setInterval(() => {
       if (document.visibilityState === "visible") void refresh();
     }, sharedCloudSource()?5000:12000);
-    const connected=()=>{void refresh();};
+    const connected=()=>{const source=sharedCloudSource();if(source&&navigator.onLine)retryCloudConnection(source);void refresh();};
     if(sharedCloudSource()){window.addEventListener('online',connected);window.addEventListener('offline',connected);}
     return () => {clearInterval(interval);window.removeEventListener('online',connected);window.removeEventListener('offline',connected);};
   }, [refresh]);
@@ -745,7 +745,7 @@ function WorkspaceApp() {
               </label>
               <button
                 className="icon-button refresh-button"
-                onClick={() => {void refresh();void checkAppUpdate();}}
+                onClick={() => {const source=sharedCloudSource();if(source)retryCloudConnection(source);void refresh();void checkAppUpdate();}}
                 title="Refresh workspace"
                 aria-label="Refresh workspace"
               >
@@ -921,8 +921,7 @@ function CloudPOSEntry({source}:{source?:string}){
       if(navigator.onLine===false){if(!await cached())throw new Error('Open this device once while online before using offline billing.');return;}
       if(remembered&&uiStorage.getItem(`dh-cloud-lock:${remembered}`)==='1'){if(active)setAuthenticated(false);return;}
       try{
-        const value=await cloudRequest<{authenticated:boolean}>('pos-session');
-        if(remembered){if(value.authenticated)await authorizeOfflineSession(remembered,cloudPOSUser);else await clearOfflineSession(remembered);}
+        const value=remembered?{authenticated:Boolean((await cloudRuntimeApi<{user:User|null}>(remembered,'/session')).user)}:await cloudRequest<{authenticated:boolean}>('pos-session',undefined,{signal:AbortSignal.timeout(8000)});
         if(active)setAuthenticated(value.authenticated&&(!remembered||await hasOfflinePIN(remembered)));
       }catch(error){const status=(error as {status?:number}).status;if((!status||status>=500)&&await cached())return;throw error;}
     })().catch(error=>{if(active)setError((error as Error).message);});
@@ -954,7 +953,7 @@ function CloudPOSEntry({source}:{source?:string}){
       if(source)location.reload();else location.replace(`/?shared=${encodeURIComponent(remembered)}`);
       return;
     }
-    try{await cloudRequest('pos-login',{pin});}
+    try{await cloudRequest('pos-login',{pin},remembered?{signal:AbortSignal.timeout(2000)}:{});}
     catch(error){
       const status=(error as {status?:number}).status;
       if(remembered&&(!status||status>=500)&&await hasOfflinePIN(remembered)){
@@ -989,6 +988,7 @@ function AutomaticCloudEntry(){
     const knownConfiguration=uiStorage.getItem('dh-cloud-configured');
     const remembered=knownConfiguration==='1';
     setError('');
+    if(remembered){setConfigured(true);return;}
     if(navigator.onLine===false){setConfigured(remembered);return;}
     void cloudRequest<{configured:boolean}>('status').then(value=>{
       if(value.configured)uiStorage.setItem('dh-cloud-configured','1');
