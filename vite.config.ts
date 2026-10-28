@@ -18,7 +18,18 @@ export default defineConfig({
         {src:'/icons/maskable-512.png',sizes:'512x512',type:'image/png',purpose:'maskable'},
       ],
     },
-    workbox: {globPatterns:['**/*.{js,css,html,svg,woff2,jpg,png}'], globIgnores:['**/icons/app-icon-source.png'], maximumFileSizeToCacheInBytes: 4_000_000, navigateFallbackDenylist:[/^\/api\//], cleanupOutdatedCaches:true},
+    workbox: {
+      globPatterns:['**/*.{js,css,html,svg,woff2,jpg,png}'], globIgnores:['**/icons/app-icon-source.png'], maximumFileSizeToCacheInBytes: 4_000_000,
+      navigateFallbackDenylist:[/^\/api\//], cleanupOutdatedCaches:true,
+      runtimeCaching:[{
+        // Uploaded/private photos remain in the authorized workspace database.
+        // External product links keep their first downloaded image for offline use.
+        urlPattern:({request,url})=>request.destination==='image' && url.origin!==self.location.origin && !url.pathname.startsWith('/api/') &&
+          (url.protocol==='https:' || (url.protocol==='http:' && ['localhost','127.0.0.1','[::1]'].includes(url.hostname))),
+        handler:'CacheFirst',
+        options:{cacheName:'hotel-pos-product-images-v1',cacheableResponse:{statuses:[0,200]}},
+      }],
+    },
   })],
   server: {host:'0.0.0.0',port:5173,proxy:{'/api':{target:'http://127.0.0.1:3001',changeOrigin:false}}},
   build: {outDir:'dist',sourcemap:false,chunkSizeWarningLimit:800},

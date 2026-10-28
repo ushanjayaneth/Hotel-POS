@@ -11,6 +11,46 @@ test.use({actionTimeout:15000});
 const pin='98765432';
 const printCounter='cloud-offline-e2e-print-count';
 
+test('a prepared browser opens the normal app address and local reports before stalled cloud replies, then starts fully offline',async({browser})=>{
+  const {app,origin,counter,phone,page,errors}=await openSharedShop(browser);
+  let release=()=>{};
+  const gate=new Promise<void>(resolve=>{release=resolve;});
+  const actions:string[]=[];
+  try{
+    await page.route('**/api/cloud?**',async route=>{
+      actions.push(new URL(route.request().url()).searchParams.get('action')??'');
+      await gate;
+      await route.abort('internetdisconnected').catch(()=>{});
+    });
+    const started=Date.now();
+    await page.goto(origin);
+    await expect(page.getByRole('button',{name:'Add Chicken rice & curry',exact:true})).toBeVisible({timeout:3000});
+    const openingMs=Date.now()-started;
+    expect(openingMs).toBeLessThan(3000);
+    await expect(page.getByLabel('Staff PIN',{exact:true})).toHaveCount(0);
+    expect(actions).not.toContain('workspace');
+    const reportsStarted=Date.now();
+    await navigate(page,'Reports');
+    const download=page.waitForEvent('download');
+    await page.getByRole('button',{name:'Profit CSV',exact:true}).click();
+    await download;
+    expect(Date.now()-reportsStarted).toBeLessThan(3000);
+    expect(actions.every(action=>['pos-session','bootstrap'].includes(action))).toBe(true);
+
+    await counter.setOffline(true);
+    const reopened=await counter.newPage();
+    reopened.on('pageerror',error=>errors.push(error.message));
+    await reopened.goto(origin);
+    await expect(reopened.getByRole('heading',{level:1,name:/Point of sale/})).toBeVisible();
+    expect(await reopened.evaluate(()=>navigator.onLine)).toBe(false);
+    await navigate(reopened,'Reports');
+    await expect(reopened.getByRole('button',{name:'Profit CSV',exact:true})).toBeEnabled();
+    await navigate(reopened,'Point of sale');
+    await expect(reopened.getByRole('button',{name:'Add Chicken rice & curry',exact:true})).toBeEnabled();
+    expect(errors).toEqual([]);
+  }finally{release();await counter.close();await phone.close();await app.close();}
+});
+
 async function navigate(page:Page,name:string){
   const open=page.getByRole('button',{name:'Open navigation',exact:true});
   if(await open.isVisible())await open.click();

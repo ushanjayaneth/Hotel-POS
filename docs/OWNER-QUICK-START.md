@@ -13,6 +13,12 @@ First setup, a device's first verified PIN entry and app caching need an online 
 
 Closing the shared POS, locking the phone or installing an app update keeps this browser signed in. Use **Sign out** when you want to lock it. Sign out, cleared site data, a new browser/device, a changed PIN or a session expired after long inactivity requires the PIN again; closing the app alone does not.
 
+A prepared browser opens its saved shop records immediately, including when started without internet. Cloud verification and fresh records load in the background. Online stock and payment acceptance checks still run before confirming an online transaction.
+
+## Update the app
+
+When a new version has downloaded, **Update available** appears in the centre of the app. Choose **Update now** to save the current draft, apply the update and reopen the workspace automatically. Saved bills, pending offline transactions and the remembered login stay in place. If a save is still pending or fails, the popup explains the problem and waits for your retry. **Later** keeps working in the current version; use the **Update available** reminder to return. Other open tabs keep their current work until updated individually. Reinstalling or clearing browser data is unnecessary.
+
 ## Before opening the till
 
 1. Check the correct branch/workspace and today's opening stock. Review low-stock items and any unfinished bills.
@@ -47,6 +53,8 @@ For Card or QR / bank collections, enter the **Approved payment reference** from
 Use **Products** for categories, prices, costs, barcodes, and **Low stock alert at**. A blank new-product threshold defaults to **5**. At or below the threshold, tracked products have a thin orange POS border. Recipe products use the portions available from their ingredients. Record real purchases, production, and stock adjustments instead of changing quantities to hide a discrepancy.
 
 For a product photo, use **Take photo** to open the camera, **Choose photo** to select a JPEG/PNG/WebP file, or paste an HTTPS image link. Camera/file images are optimized for clear product photos and saved as files no larger than 450 KB. They can be added offline and upload automatically when the app reconnects. Other devices download shared photos when needed and keep them for later offline use. An external image link still depends on that website and the network.
+
+External product-link images also keep their first successful download in this browser's image cache for offline reopening. An image never downloaded on that browser still needs internet. Uploaded photos remain in the workspace database; a browser image cache is not an independent photo backup.
 
 **Daily profitability** shows a separate red **Customer loans to collect** panel with customer names, phone numbers and money still owed through the selected end date, including earlier loans. Actual repayments for the period appear in green. Bill-basis profit includes confirmed unpaid/loan sales; it is not the amount of cash received. Repayments reduce debt without booking another sale or extra profit. Credit refunds reduce debt without receiving money. **Profit CSV** includes the same loan totals and customer balances.
 

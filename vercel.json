@@ -4,5 +4,8 @@
   "buildCommand":"npm run build",
   "outputDirectory":"dist",
   "functions":{"api/cloud.ts":{"maxDuration":60}},
-  "headers":[{"source":"/api/:path*","headers":[{"key":"Cache-Control","value":"no-store"}]}]
+  "headers":[
+    {"source":"/api/:path*","headers":[{"key":"Cache-Control","value":"no-store"}]},
+    {"source":"/sw.js","headers":[{"key":"Cache-Control","value":"no-store, max-age=0"}]}
+  ]
 }

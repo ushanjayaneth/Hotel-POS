@@ -6,6 +6,8 @@ The Firebase URL and Admin credentials stay on the server. A signed, HttpOnly se
 
 The POS session is remembered in the same browser/profile across app closes, device locks, browser restarts and PWA updates. Its private cookie lasts up to 365 days and renews with verified use at most once daily. Existing valid 12-hour POS cookies upgrade on the next verified request. Explicit Sign out cancels pending requests and clears the cookie; cleared site data, a new profile, expired inactivity or changed server credentials require PIN verification again. The legacy email-owner session retains its separate 12-hour policy.
 
+Prepared devices open their remembered shop and local snapshot without waiting for cloud discovery or session verification. Source-scoped background checks refresh the cache and prompt for PIN if the server rejects authorization. Cached reports and ledgers use local handlers; online transaction acknowledgement and rejection/rollback checks remain in place. Network snapshot reads do not hold the cashier's transaction lock, and a refresh-completion event does not create another immediate network request.
+
 ## Configure Vercel once
 
 1. In the intended Firebase project, open **Project settings → Service accounts → Firebase Admin SDK → Generate new private key**. Keep that downloaded JSON outside Git and deliver credentials privately.

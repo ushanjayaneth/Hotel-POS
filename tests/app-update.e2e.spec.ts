@@ -28,7 +28,7 @@ async function staticHost() {
       if (pathname === '/sw.js') {
         workerRevisions.push(revision);
         response.writeHead(200, {'Content-Type': mime['.js'], 'Cache-Control': 'no-store', 'Service-Worker-Allowed': '/'});
-        response.end(`${worker}\n// Browser update fixture revision ${revision}\n`);
+        response.end(`${worker}\n// Browser update fixture revision ${revision}\nself.addEventListener('message', event => {if(event.data?.type === 'UPDATE_FIXTURE_VERSION') event.ports[0]?.postMessage(${revision});});\n`);
         return;
       }
       const path = resolve(directory, `.${pathname === '/' ? '/index.html' : pathname}`);
@@ -47,6 +47,15 @@ async function staticHost() {
 
 async function close(server: Server) {
   await new Promise<void>((accept, reject) => {server.close(error => error ? reject(error) : accept());server.closeAllConnections();});
+}
+
+async function activeWorkerRevision(page: Page) {
+  return page.evaluate(() => new Promise<number>((accept, reject) => {
+    const channel = new MessageChannel();
+    const timeout = setTimeout(() => {channel.port1.close();reject(new Error('Active worker did not report its fixture revision.'));}, 3000);
+    channel.port1.onmessage = event => {clearTimeout(timeout);channel.port1.close();accept(Number(event.data));};
+    navigator.serviceWorker.controller!.postMessage({type: 'UPDATE_FIXTURE_VERSION'}, [channel.port2]);
+  }));
 }
 
 async function rows<T>(page: Page, databaseName: string, storeName: string): Promise<T[]> {
@@ -132,7 +141,7 @@ async function restoreDraftWrites(page: Page) {
   await page.evaluate(() => (window as typeof window & {restoreDraftWrites?: () => void}).restoreDraftWrites?.());
 }
 
-test('Refresh workspace finds a real PWA update and Reload preserves device sales, customer loans and the current draft', async ({page}) => {
+test('a real PWA update opens a centered prompt automatically and updates on one click while preserving sales, loans, PIN access and the draft', async ({page}) => {
   const host = await staticHost();
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -151,6 +160,7 @@ test('Refresh workspace finds a real PWA update and Reload preserves device sale
     await page.evaluate(async () => {await navigator.serviceWorker.ready;});
     await page.reload();
     await expect.poll(() => page.evaluate(() => Boolean(navigator.serviceWorker.controller))).toBe(true);
+    expect(await activeWorkerRevision(page)).toBe(1);
 
     // Save real business activity before changing the service worker at this origin.
     await page.getByRole('button', {name: 'Add Chicken rice & curry', exact: true}).click();
@@ -178,16 +188,36 @@ test('Refresh workspace finds a real PWA update and Reload preserves device sale
     page.on('request', request => {if (request.isNavigationRequest() && request.frame() === page.mainFrame()) navigations++;});
 
     host.publish();
-    await page.getByRole('button', {name: 'Refresh workspace', exact: true}).click();
-    const banner = page.locator('.update-banner');
-    await expect(banner).toContainText('A workspace update is ready');
+    // Returning to the app checks for an update without finding a toolbar action.
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    const update = page.getByRole('dialog', {name: 'Update available', exact: true});
+    await expect(update).toBeVisible();
     expect(host.workerRevisions).toContain(2);
     expect(navigations, 'Checking for updates must not reload active work automatically.').toBe(0);
+    const desktop = page.viewportSize()!, desktopBox = (await update.boundingBox())!;
+    expect(Math.abs(desktopBox.x + desktopBox.width / 2 - desktop.width / 2)).toBeLessThan(4);
+    await expect.poll(async () => {const box = (await update.boundingBox())!;return Math.abs(box.y + box.height / 2 - desktop.height / 2);}).toBeLessThan(4);
+    await page.setViewportSize({width: 390, height: 844});
+    await expect.poll(async () => {
+      const box = (await update.boundingBox())!;
+      return box.x >= 0 && box.y >= 0 && box.x + box.width <= 391 && box.y + box.height <= 845;
+    }).toBe(true);
+    await update.getByRole('button', {name: 'Later', exact: true}).click();
+    await expect(update).toHaveCount(0);
+    const reminder = page.getByRole('button', {name: 'Update available', exact: true});
+    await expect(reminder).toBeVisible();
+    await page.setViewportSize(desktop);
     await expect(page.locator('aside.order-panel')).toContainText('Ceylon milk tea');
-    await banner.getByRole('button', {name: 'Reload', exact: true}).click();
+    expect(navigations, 'Choosing Later must keep the current app and draft open.').toBe(0);
+    await reminder.click();
+    await expect(update).toBeVisible();
+    await update.getByRole('button', {name: 'Update now', exact: true}).click();
     await expect.poll(() => navigations).toBe(1);
     await expect(page.getByRole('button', {name: 'Sign out', exact: true})).toBeVisible();
-    await expect(banner).toHaveCount(0);
+    expect(await activeWorkerRevision(page)).toBe(2);
+    await expect(page.getByLabel('Staff PIN', {exact: true})).toHaveCount(0);
+    await expect(update).toHaveCount(0);
+    await expect(reminder).toHaveCount(0);
     await expect(page.locator('aside.order-panel')).toContainText('Ceylon milk tea');
     await expect(page.getByRole('combobox', {name: 'Select table', exact: true})).toHaveCount(0);
     expect(await businessRecords(page)).toEqual(before);
@@ -198,7 +228,7 @@ test('Refresh workspace finds a real PWA update and Reload preserves device sale
   } finally {await close(host.server);}
 });
 
-test('Reload stops for a pending or failed draft commit and only reloads after an explicit successful retry', async ({page}) => {
+test('Update now stays open with a clear error for pending or failed draft commits and only reloads after an explicit successful retry', async ({page}) => {
   const host = await staticHost();
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -206,31 +236,37 @@ test('Reload stops for a pending or failed draft commit and only reloads after a
     await openDeviceWorkspace(page, host.url);
     host.publish();
     await page.getByRole('button', {name: 'Refresh workspace', exact: true}).click();
-    const banner = page.locator('.update-banner');
-    await expect(banner).toContainText('A workspace update is ready');
+    const update = page.getByRole('dialog', {name: 'Update available', exact: true});
+    await expect(update).toBeVisible();
+    await update.getByRole('button', {name: 'Later', exact: true}).click();
+    const reminder = page.getByRole('button', {name: 'Update available', exact: true});
     let navigations = 0;
     page.on('request', request => {if (request.isNavigationRequest() && request.frame() === page.mainFrame()) navigations++;});
     await holdWrites(page, 'demo-hotel-device', 'drafts');
     await page.getByRole('button', {name: 'Add Ceylon milk tea', exact: true}).click();
     await expect.poll(() => page.evaluate(() => (window as typeof window & {updateWriteCount?: () => number}).updateWriteCount?.() || 0)).toBeGreaterThan(0);
-    await banner.getByRole('button', {name: 'Reload', exact: true}).click();
-    await expect(page.getByText('The current draft is still saving. Wait for it to finish, then click Reload again.', {exact: true})).toBeVisible({timeout: 15000});
+    await reminder.click();
+    await update.getByRole('button', {name: 'Update now', exact: true}).click();
+    await expect(update.getByRole('button', {name: 'Updating…', exact: true})).toBeDisabled();
+    await expect(update.getByRole('alert')).toContainText('The current draft is still saving.', {timeout: 15000});
     expect(navigations).toBe(0);
     await releaseWrites(page);
     await expect.poll(async () => (await rows<Draft>(page, 'demo-hotel-device', 'drafts')).find(draft => draft.id === 'device:b1')?.lines[0]?.quantity).toBe(1);
     expect(navigations, 'A timed-out attempt must not reload later when its old draft write finishes.').toBe(0);
 
+    await update.getByRole('button', {name: 'Later', exact: true}).click();
     await failDraftWrites(page);
     await page.locator('aside.order-panel').getByRole('button', {name: 'Add one more Ceylon milk tea', exact: true}).click();
     await expect(page.getByRole('alert')).toContainText('This draft could not be saved');
-    await banner.getByRole('button', {name: 'Reload', exact: true}).click();
-    await expect(page.getByText('Reload stopped because the current draft could not be saved. Free device storage and try again.', {exact: true})).toBeVisible();
+    await reminder.click();
+    await update.getByRole('button', {name: 'Update now', exact: true}).click();
+    await expect(update.getByRole('alert')).toContainText('Reload stopped because the current draft could not be saved.');
     expect(navigations).toBe(0);
     await restoreDraftWrites(page);
-    await banner.getByRole('button', {name: 'Reload', exact: true}).click();
+    await update.getByRole('button', {name: 'Update now', exact: true}).click();
     await expect.poll(() => navigations).toBe(1);
     await expect(page.getByRole('button', {name: 'Sign out', exact: true})).toBeVisible();
-    await expect(banner).toHaveCount(0);
+    await expect(update).toHaveCount(0);
     await expect.poll(async () => (await rows<Draft>(page, 'demo-hotel-device', 'drafts')).find(draft => draft.id === 'device:b1')?.lines[0]?.quantity).toBe(2);
     await expect(page.locator('aside.order-panel')).toContainText('Ceylon milk tea');
     expect(errors).toEqual([]);
@@ -256,9 +292,12 @@ test('activating an update in another tab never reloads a busy customer save, an
     await expect.poll(() => other!.evaluate(() => Boolean(navigator.serviceWorker.controller))).toBe(true);
     host.publish();
     await page.getByRole('button', {name: 'Refresh workspace', exact: true}).click();
-    await expect(page.locator('.update-banner')).toBeVisible();
-    await other.getByRole('button', {name: 'Refresh workspace', exact: true}).click();
-    await expect(other.locator('.update-banner')).toBeVisible();
+    const update = page.getByRole('dialog', {name: 'Update available', exact: true});
+    await expect(update).toBeVisible();
+    await other.evaluate(() => window.dispatchEvent(new Event('focus')));
+    const otherUpdate = other.getByRole('dialog', {name: 'Update available', exact: true});
+    await expect(otherUpdate).toBeVisible();
+    await otherUpdate.getByRole('button', {name: 'Later', exact: true}).click();
 
     await other.getByRole('button', {name: 'Add customer', exact: true}).click();
     const chooser = other.getByRole('dialog', {name: 'Add customer', exact: true});
@@ -272,9 +311,10 @@ test('activating an update in another tab never reloads a busy customer save, an
     let otherNavigations = 0;
     page.on('request', request => {if (request.isNavigationRequest() && request.frame() === page.mainFrame()) firstNavigations++;});
     other.on('request', request => {if (request.isNavigationRequest() && request.frame() === other!.mainFrame()) otherNavigations++;});
-    await page.locator('.update-banner').getByRole('button', {name: 'Reload', exact: true}).click();
+    await update.getByRole('button', {name: 'Update now', exact: true}).click();
     await expect.poll(() => firstNavigations).toBe(1);
     expect(otherNavigations).toBe(0);
+    await expect(otherUpdate, 'Activating a dismissed update in another tab must leave the active customer save usable.').toHaveCount(0);
     await expect(chooser.getByRole('button', {name: 'Saving customer…', exact: true})).toBeDisabled();
     await expect(chooser.getByLabel('Customer name', {exact: true})).toHaveValue('Customer saved across a tab update');
     await releaseWrites(other);
@@ -282,9 +322,17 @@ test('activating an update in another tab never reloads a busy customer save, an
     await expect.poll(async () => (await businessRecords(other!)).customers.filter(customer => customer.name === 'Customer saved across a tab update').length).toBe(1);
     expect(otherNavigations, 'Finishing a save in another tab must not schedule an automatic reload.').toBe(0);
     const before = await businessRecords(other);
-    await other.locator('.update-banner').getByRole('button', {name: 'Reload', exact: true}).click();
+    // A newer release may arrive before this tab reloads the already-activated
+    // release. Update now must activate the new waiting worker in one attempt.
+    expect(await activeWorkerRevision(other)).toBe(2);
+    host.publish();
+    await other.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await expect(otherUpdate).toBeVisible();
+    expect(host.workerRevisions).toContain(3);
+    await otherUpdate.getByRole('button', {name: 'Update now', exact: true}).click();
     await expect.poll(() => otherNavigations).toBe(1);
     await expect(other.getByRole('button', {name: 'Sign out', exact: true})).toBeVisible();
+    expect(await activeWorkerRevision(other)).toBe(3);
     expect(await businessRecords(other)).toEqual(before);
     expect(errors).toEqual([]);
   } finally {

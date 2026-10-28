@@ -860,7 +860,7 @@ textarea::placeholder {
 .mobile-overlay {
   display: none;
 }
-.update-banner {
+.update-reminder {
   position: fixed;
   bottom: 20px;
   left: 50%;
@@ -868,13 +868,21 @@ textarea::placeholder {
   z-index: 200;
   background: #213225;
   border: 1px solid #b7f67a33;
-  padding: 14px 20px;
+  padding: 12px 18px;
   border-radius: 12px;
   display: flex;
   align-items: center;
-  gap: 15px;
+  gap: 10px;
   font-size: 12px;
+  max-width: calc(100vw - 32px);
+  box-shadow: 0 10px 32px #0006;
 }
+.app-update-content {color:#b7c4bd;font-size:13px;line-height:1.7;}
+.app-update-symbol {width:68px;height:68px;border:1px solid #b7f67a30;border-radius:20px;background:#b7f67a0d;color:#b7f67a;display:grid;place-items:center;margin-bottom:20px;}
+.app-update-safety {display:flex;gap:10px;align-items:flex-start;padding:14px;margin-top:18px;border:1px solid #ffffff0b;border-radius:12px;background:#0d17162b;color:#91a095;font-size:11px;}
+.app-update-safety svg {flex-shrink:0;margin-top:2px;color:#b7f67a;}
+.app-update-content .error-message {margin-top:16px;}
+.app-update-content .form-actions {flex-wrap:wrap;}
 .footer-line {
   display: flex;
   justify-content: space-between;

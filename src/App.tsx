@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
   ArrowUpRight,
@@ -44,7 +44,6 @@ import { browserDb } from "./lib/db";
 import { Spinner, Modal } from "./components/ui";
 import POS from "./pages/POS";
 import { Orders, Kitchen, Tables, Receipt } from "./pages/Operations";
-import Management from "./pages/Management";
 import Products from './pages/Products';
 import HeldBills from './pages/HeldBills';
 import {WorkspacePreferences} from './components/WorkspacePreferences';
@@ -62,6 +61,8 @@ import {authorizeOfflinePIN,authorizeOfflineSession,clearOfflineSession,getOffli
 import {cloudPOSUser,cloudRuntimeApi,retryCloudConnection} from './lib/cloud-runtime';
 import {requestDevicePersistence} from './lib/local/storage';
 import ConnectivityStatus from './components/ConnectivityStatus';
+
+const Management = lazy(() => import('./pages/Management'));
 
 // Optional UI preferences must never block access to committed business records.
 const uiStorage = {
@@ -308,6 +309,11 @@ function WorkspaceApp() {
     { id: number; message: string; type: string }[]
   >([]);
   const [updateReady, setUpdateReady] = useState(false);
+  const [updateOpen, setUpdateOpen] = useState(false);
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [updateError, setUpdateError] = useState('');
+  const updateDismissed = useRef(false);
+  const announcedWorker = useRef<ServiceWorker | null>(null);
   const [updateWorker, setUpdateWorker] = useState<
     ((reload?: boolean) => Promise<void>) | null
   >(null);
@@ -324,18 +330,33 @@ function WorkspaceApp() {
     },
     [],
   );
+  const announceUpdate = useCallback((worker?: ServiceWorker | null) => {
+    if (worker && announcedWorker.current !== worker) {
+      announcedWorker.current = worker;
+      updateActivated.current = false;
+      updateDismissed.current = false;
+    }
+    setUpdateReady(true);
+    if (!updateDismissed.current) setUpdateOpen(true);
+  }, []);
+  const reportUpdateError = useCallback((message: string) => {
+    setUpdateBusy(false);
+    setUpdateError(message);
+    setUpdateOpen(true);
+    notify(message, 'error');
+  }, [notify]);
   const checkAppUpdate = useCallback(async () => {
     if (navigator.onLine === false || !("serviceWorker" in navigator)) return;
     try {
       const registration = await navigator.serviceWorker.getRegistration();
       if (!registration) return;
-      if (registration.waiting) setUpdateReady(true);
+      if (registration.waiting) announceUpdate(registration.waiting);
       await registration.update();
-      if (registration.waiting) setUpdateReady(true);
+      if (registration.waiting) announceUpdate(registration.waiting);
     } catch {
       /* An unavailable update must not interrupt local sales or stored drafts. */
     }
-  }, []);
+  }, [announceUpdate]);
   const finishAppUpdate = useCallback(async () => {
     if (updateReloading.current) return;
     updateReloading.current = true;
@@ -348,9 +369,9 @@ function WorkspaceApp() {
     } catch (error) {
       updateRequested.current = false;
       updateReloading.current = false;
-      notify((error as Error).message, 'error');
+      reportUpdateError((error as Error).message);
     }
-  }, [notify]);
+  }, [reportUpdateError]);
   useEffect(() => {
     const checkForUpdate=()=>{
       if(document.visibilityState==='visible')void checkAppUpdate();
@@ -358,7 +379,7 @@ function WorkspaceApp() {
     const workerActivated = () => {
       clearTimeout(updateActivationTimer.current);
       updateActivated.current = true;
-      setUpdateReady(true);
+      announceUpdate();
       // Activation in another tab never grants permission to reload this page.
       if (updateRequested.current) void finishAppUpdate();
     };
@@ -371,10 +392,10 @@ function WorkspaceApp() {
     const update = registerSW({
       immediate:true,
       onNeedRefresh() {
-        setUpdateReady(true);
+        void navigator.serviceWorker.getRegistration().then(registration => announceUpdate(registration?.waiting)).catch(()=>{});
       },
       onRegisteredSW(_url, registration) {
-        if (registration?.waiting) setUpdateReady(true);
+        if (registration?.waiting) announceUpdate(registration.waiting);
       },
       onNeedReload: workerActivated,
       onRegisterError() {
@@ -386,19 +407,21 @@ function WorkspaceApp() {
     window.addEventListener('online',checkForUpdate);
     document.addEventListener('visibilitychange',checkForUpdate);
     navigator.serviceWorker?.addEventListener('controllerchange',controllerChanged);
-    const timer = window.setInterval(checkForUpdate, 5 * 60 * 1000);
+    const timer = window.setInterval(checkForUpdate, 60 * 1000);
     return()=>{window.clearInterval(timer);clearTimeout(updateActivationTimer.current);window.removeEventListener('focus',checkForUpdate);window.removeEventListener('online',checkForUpdate);document.removeEventListener('visibilitychange',checkForUpdate);navigator.serviceWorker?.removeEventListener('controllerchange',controllerChanged);};
-  }, [checkAppUpdate,finishAppUpdate]);
+  }, [checkAppUpdate,finishAppUpdate,announceUpdate]);
   async function reloadAppUpdate() {
-    if (updateReloading.current) return;
+    if (updateReloading.current || updateRequested.current) return;
+    setUpdateError('');
     if (localWrites.current > 0) {
-      notify('Wait for the current save to finish before reloading the app.', 'error');
+      reportUpdateError('Wait for the current save to finish before reloading the app.');
       return;
     }
     if (!updateWorker) {
-      notify('The app update is not ready. Refresh the workspace and try again.', 'error');
+      reportUpdateError('The app update is not ready. Refresh the workspace and try again.');
       return;
     }
+    setUpdateBusy(true);
     try {
       if (updateActivated.current) {
         updateRequested.current = true;
@@ -417,13 +440,13 @@ function WorkspaceApp() {
       updateActivationTimer.current = setTimeout(() => {
         if (!updateRequested.current || updateActivated.current) return;
         updateRequested.current = false;
-        notify('The app update has not finished activating. Keep this page open and click Reload again.', 'error');
+        reportUpdateError('The app update has not finished activating. Keep this page open and try Update now again.');
       }, 10000);
       await updateWorker(true);
     } catch {
       clearTimeout(updateActivationTimer.current);
       updateRequested.current = false;
-      notify('The app update could not be applied. Keep this app open and try Reload again.', 'error');
+      reportUpdateError('The app update could not be applied. Keep this app open and try Update now again.');
     }
   }
   useEffect(() => {
@@ -480,7 +503,7 @@ function WorkspaceApp() {
       if(sharedCloudSource())uiStorage.setItem('dh-cloud-preferred-source',sharedCloudSource()!);
       setHubOnline(snapshot.sync.hubOnline!==false);
       setLoadError("");
-      if(!deviceMode)await browserDb.snapshots
+      if(!deviceMode&&!sharedCloudSource())await browserDb.snapshots
         .put({
           id: cacheKey,
           data: snapshot,
@@ -531,8 +554,22 @@ function WorkspaceApp() {
       if (document.visibilityState === "visible") void refresh();
     }, sharedCloudSource()?5000:12000);
     const connected=()=>{const source=sharedCloudSource();if(source&&navigator.onLine)retryCloudConnection(source);void refresh();};
-    if(sharedCloudSource()){window.addEventListener('online',connected);window.addEventListener('offline',connected);}
-    return () => {clearInterval(interval);window.removeEventListener('online',connected);window.removeEventListener('offline',connected);};
+    let refreshTimer:ReturnType<typeof setTimeout>|undefined;
+    const cachedCloudChanged=(event:Event)=>{
+      const change=(event as CustomEvent<{sourceId:string;branchId:string|null}>).detail;
+      if(change?.sourceId!==sharedCloudSource()||change.branchId&&change.branchId!==branchId)return;
+      clearTimeout(refreshTimer);refreshTimer=setTimeout(()=>void refresh(),40);
+    };
+    const sessionChanged=(event:Event)=>{
+      const change=(event as CustomEvent<{sourceId:string;user:User|null}>).detail;
+      if(change?.sourceId===sharedCloudSource()&&change.user===null){setUser(null);setData(null);}
+    };
+    if(sharedCloudSource()){
+      window.addEventListener('online',connected);window.addEventListener('offline',connected);
+      window.addEventListener('cloud-runtime-refresh',cachedCloudChanged);
+      window.addEventListener('cloud-runtime-session',sessionChanged);
+    }
+    return () => {clearInterval(interval);clearTimeout(refreshTimer);window.removeEventListener('online',connected);window.removeEventListener('offline',connected);window.removeEventListener('cloud-runtime-refresh',cachedCloudChanged);window.removeEventListener('cloud-runtime-session',sessionChanged);};
   }, [refresh]);
   useEffect(() => {
     if (!user) return;
@@ -830,7 +867,7 @@ function WorkspaceApp() {
                 }}
               />
             ) : page==='settings'&&!['owner','manager'].includes(user.role) ? <><div className="page-heading"><div><div className="eyebrow">MAKE IT YOURS</div><h1>Settings<span className="heading-period">.</span></h1><p className="page-subtitle">Display, shortcuts, receipts and devices.</p></div></div><WorkspacePreferences/></> : (
-              <Management page={page} />
+              <Suspense fallback={<Spinner label="Opening page"/>}><Management page={page} /></Suspense>
             )}
             <div className="footer-line">
               <span>
@@ -865,26 +902,7 @@ function WorkspaceApp() {
             </div>
           ))}
         </div>
-        {updateReady && (
-          <div className="update-banner">
-            <span>
-              A workspace update is ready. Save drafts before reloading.
-            </span>
-            <button
-              className="button button-primary button-small"
-              onClick={() => void reloadAppUpdate()}
-            >
-              Reload
-            </button>
-            <button
-              className="icon-button"
-              onClick={() => setUpdateReady(false)}
-              aria-label="Dismiss update"
-            >
-              <X size={14} />
-            </button>
-          </div>
-        )}
+        {updateReady && !updateOpen && <button className="update-reminder button" aria-label="Update available" onClick={() => {setUpdateError('');setUpdateOpen(true);}}><RefreshCw size={16}/><span>Update available</span></button>}
       </div>
       {receipt && (
         <Receipt
@@ -895,12 +913,30 @@ function WorkspaceApp() {
         />
       )}
       {shortcutHelp&&<Modal title="Keyboard shortcuts" subtitle="Your current shortcuts for this device." onClose={()=>setShortcutHelp(false)} wide><div className="shortcut-help">{shortcutActions.map(action=><div key={action.id}><span>{action.label}</span><kbd>{preferences.shortcuts[action.id]}</kbd></div>)}</div><div className="form-actions"><button className="button button-ghost" onClick={()=>{setShortcutHelp(false);navigate('settings');}}>Customize in Settings</button><button className="button button-primary" onClick={()=>setShortcutHelp(false)}>Done</button></div></Modal>}
+      {updateReady && updateOpen && <Modal title="Update available" subtitle="A newer version of your workspace is ready." onClose={() => {if(updateBusy)return false;updateDismissed.current=true;setUpdateOpen(false);}}>
+        <div className="app-update-content" aria-busy={updateBusy}>
+          <div className={`app-update-symbol ${updateBusy?'is-updating':''}`} aria-hidden="true"><RefreshCw size={30} className={updateBusy?'spin':''}/></div>
+          <p>{updateBusy?'Saving your cart and applying the update. The app will reopen automatically.':'Your current cart will be saved and the app will reopen in the same workspace. Finish any other open forms before updating, or choose Later.'}</p>
+          <div className="app-update-safety"><ShieldCheck size={17}/><span>Your saved bills, stock and offline transactions stay on this device.</span></div>
+          {updateError && <div className="error-message" role="alert">{updateError}</div>}
+          <div className="form-actions"><button className="button button-ghost" disabled={updateBusy} onClick={() => {updateDismissed.current=true;setUpdateOpen(false);}}>Later</button><button className="button button-primary" disabled={updateBusy} onClick={() => void reloadAppUpdate()}><RefreshCw size={16} className={updateBusy?'spin':''}/>{updateBusy?'Updating…':'Update now'}</button></div>
+        </div>
+      </Modal>}
     </AppContext.Provider>
   );
 }
 
 function CloudPOSEntry({source}:{source?:string}){
   const [authenticated,setAuthenticated]=useState<boolean|null>(null);
+  useEffect(()=>{
+    const changed=(event:Event)=>{
+      const change=(event as CustomEvent<{sourceId:string;user:User|null}>).detail;
+      const remembered=source??uiStorage.getItem('dh-cloud-preferred-source');
+      if(change?.sourceId===remembered&&change.user===null)setAuthenticated(false);
+    };
+    window.addEventListener('cloud-runtime-session',changed);
+    return()=>window.removeEventListener('cloud-runtime-session',changed);
+  },[source]);
   const [error,setError]=useState('');
   const [attempt,setAttempt]=useState(0);
   const opening=useRef<{attempt:number;promise:Promise<string|null>}|null>(null);
@@ -918,6 +954,9 @@ function CloudPOSEntry({source}:{source?:string}){
       return true;
     };
     void (async()=>{
+      // The installed app starts at /. A prepared browser already knows its
+      // shop, so open that local replica before attempting cloud discovery.
+      if(!source&&navigator.onLine!==false&&await cached())return;
       if(navigator.onLine===false){if(!await cached())throw new Error('Open this device once while online before using offline billing.');return;}
       if(remembered&&uiStorage.getItem(`dh-cloud-lock:${remembered}`)==='1'){if(active)setAuthenticated(false);return;}
       try{
