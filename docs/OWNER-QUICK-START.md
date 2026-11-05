@@ -15,6 +15,16 @@ Closing the shared POS, locking the phone or installing an app update keeps this
 
 A prepared browser opens its saved shop records immediately, including when started without internet. Cloud verification and fresh records load in the background. Online stock and payment acceptance checks still run before confirming an online transaction.
 
+## Unlock administration
+
+In a shared cloud shop with the admin lock enabled, the workspace opens in **Cashier mode**. Select the hotel logo at the top of the sidebar and enter your separate private **Admin PIN**. On a phone, open the navigation menu to reach the logo. An unlocked window shows reports, profit and cost information, catalog editing, purchases, inventory, production and business settings. Normal billing, customer loans and repayments remain available while locked; **Day end & expenses** shows only cash-shift opening and closing.
+
+Select the logo again to lock administration. Reloading or reopening the window also locks it without signing out the cashier or deleting work. Each device/window unlocks separately. After the device has prepared its shop online, the same admin PIN unlocks administration offline. Approved offline edits keep their approval for automatic upload after relocking. A PIN change may require a fresh online preparation and admin approval for older pending changes.
+
+To correct a product, unlock administration, open **Products**, and choose **Edit** on its row. Update its selling price, cost, photo or low-stock threshold. For a prepared/resale product, enable **Update branch stock count** and enter the actual counted quantity. Recipe products use their ingredient inventory and production records instead. Editing only a price or photo preserves quantities sold by other devices; an intervening sale during an explicit count asks you to refresh before saving that count.
+
+The admin lock controls the app interface and administrative API actions. Prepared devices still retain the business records needed for offline operation; keep the device, browser profile and backups restricted to trusted people.
+
 ## Update the app
 
 When a new version has downloaded, **Update available** appears in the centre of the app. Choose **Update now** to save the current draft, apply the update and reopen the workspace automatically. Saved bills, pending offline transactions and the remembered login stay in place. If a save is still pending or fails, the popup explains the problem and waits for your retry. **Later** keeps working in the current version; use the **Update available** reminder to return. Other open tabs keep their current work until updated individually. Reinstalling or clearing browser data is unnecessary.

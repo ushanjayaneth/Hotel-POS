@@ -11,6 +11,7 @@ const row=z.record(z.string(),z.unknown());
 export const offlineCommitSchema=z.object({
   sourceId:identifier.regex(/^[A-Za-z0-9_-]+$/),deviceId:identifier.regex(/^[A-Za-z0-9_-]+$/),transactionId:identifier,
   createdAt:z.iso.datetime(),path:z.string().max(300),method:z.enum(['POST','PUT','PATCH','DELETE']),offline:z.boolean().optional(),
+  adminGrant:z.string().max(10000).optional(),
   changes:z.array(z.object({kind:z.enum(CLOUD_MONITOR_KINDS),id:identifier,branchId:identifier.nullable(),before:row.nullable(),after:row.nullable()}).strict()).min(1).max(1000),
 }).strict();
 const stable=(value:unknown):string=>value===null||typeof value!=='object'?JSON.stringify(value):Array.isArray(value)?`[${value.map(stable).join(',')}]`:`{${Object.keys(value).sort().map(key=>`${JSON.stringify(key)}:${stable((value as Record<string,unknown>)[key])}`).join(',')}}`;

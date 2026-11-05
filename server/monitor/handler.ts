@@ -5,6 +5,8 @@ import {firebaseMonitorStore,recordKey,type MonitorStore,type Projection} from '
 import {monitorBootstrap,monitorCommand} from './engine.js';
 import {applyOfflineCommit,offlineCloudState,offlineCommitSchema} from './offline.js';
 import {assertMediaPayload,isMediaId,type MediaRecord} from '../../shared/media.js';
+import {createAdminAccess} from './admin-access.js';
+import {isAdminCommit,isAdminOperation,redactAdminResult,redactAdminSnapshot} from '../../shared/admin-access.js';
 
 const id=z.string().regex(/^[A-Za-z0-9_-]{1,160}$/);
 const change=z.object({kind:z.enum(CLOUD_MONITOR_KINDS),id:z.string().min(1).max(160),branchId:z.string().max(160).nullable(),value:z.record(z.string(),z.unknown())}).strict();
@@ -29,6 +31,7 @@ function validateData(value:unknown,depth=0):void {
 export interface MonitorOptions {store?:MonitorStore;env?:NodeJS.ProcessEnv}
 export function createMonitorHandler(options:MonitorOptions={}) {
   const env=options.env??process.env;
+  const admin=createAdminAccess(env);
   const posSessionSeconds=365*86400;
   const scryptFormat=/^scrypt\$[a-fA-F0-9]{64}\$[a-fA-F0-9]{128}$/;
   const pinFormat=/^[0-9]{6,16}$/;
@@ -78,7 +81,7 @@ export function createMonitorHandler(options:MonitorOptions={}) {
         // cookies, without rewriting the cookie on every background poll.
         if(session?.purpose==='pos-owner-v1'&&session.exp<=Date.now()+(posSessionSeconds-86400)*1000)rememberPos();
       };
-      if(action==='status'&&method==='GET')return reply({configured:missing().length===0,missing:missing(),posPinConfigured:posPinConfigured()});
+      if(action==='status'&&method==='GET')return reply({configured:missing().length===0,missing:missing(),posPinConfigured:posPinConfigured(),...(admin.enabled()?{adminLockEnabled:true}:{})});
       if(missing().length)return reply({error:'Cloud monitoring is not configured on this server.',code:'CLOUD_NOT_CONFIGURED',missing:missing()},503);
       check(/^[A-Za-z0-9_-]{1,80}$/.test(env.CLOUD_TENANT_ID??'hotel'),'Invalid cloud tenant configuration.',503);
       const store=options.store??firebaseMonitorStore(env);
@@ -95,7 +98,7 @@ export function createMonitorHandler(options:MonitorOptions={}) {
         check(await store.rate(`pos-login-${ip}`,12,15*60000),'Too many PIN attempts. Try again later.',429,'RATE_LIMITED');
         check(pinValid(input.pin),'The POS PIN is incorrect.',401,'INVALID_CREDENTIALS');
         rememberPos();
-        return reply({ok:true});
+        return reply({ok:true,...(admin.enabled()?{adminLockEnabled:true}:{})});
       }
       if(action==='login'&&method==='POST'){
         check(ownerLoginConfigured(),'Owner account sign-in is not configured on this server.',503,'OWNER_LOGIN_NOT_CONFIGURED');
@@ -110,7 +113,7 @@ export function createMonitorHandler(options:MonitorOptions={}) {
       if(['session','pos-session'].includes(action)&&method==='GET'){
         const session=authentication(request);
         renewPos(session);
-        return reply({authenticated:Boolean(session)});
+        return reply({authenticated:Boolean(session),...(admin.enabled()?{adminLockEnabled:true}:{})});
       }
       if(['logout','pos-logout'].includes(action)&&method==='POST'){headers['Set-Cookie']=`hotel-cloud=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT${url.protocol==='https:'?'; Secure':''}`;return reply({ok:true});}
       if(['push','heartbeat'].includes(action)&&method==='POST'){
@@ -231,6 +234,22 @@ export function createMonitorHandler(options:MonitorOptions={}) {
         return reply({sourceId:input.sourceId,epoch,token:sign({purpose:'owner-paired-writer-v3',sourceId:input.sourceId,epoch,version:version(),exp:Date.now()+365*86400000})});
       }
       const sourceId=id.parse(url.searchParams.get('sourceId')??body.sourceId);
+      const hasAdmin=(grant:unknown=body.adminGrant)=>!admin.enabled()||admin.validGrant(grant??request.headers.get('x-pos-admin-grant'),sourceId);
+      const requireAdmin=()=>check(hasAdmin(),'Unlock admin access from the hotel logo to continue.',403,'ADMIN_LOCKED');
+      if(action==='admin-session'&&method==='GET'){
+        const projection=await store.get(sourceId);check(projection?.source.shared&&projection.source.ready&&!projection.source.revoked,'Workspace not found.',404);
+        return reply({unlocked:hasAdmin(),adminAccess:admin.configuration(sourceId)});
+      }
+      if(action==='admin-lock'&&method==='POST')return reply({ok:true});
+      if(action==='admin-unlock'&&method==='POST'){
+        const input=z.object({sourceId:id,pin:z.string().max(64)}).strict().parse(body);
+        const projection=await store.get(sourceId);check(projection?.source.shared&&projection.source.ready&&!projection.source.revoked,'Workspace not found.',404);
+        if(!admin.enabled())return reply({unlocked:true,adminAccess:{enabled:false}});
+        const ip=hash(request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()??'local');
+        check(await store.rate(`admin-unlock-${ip}-${sourceId}`,10,15*60000),'Too many incorrect admin PIN attempts. Try again in 15 minutes.',429,'RATE_LIMITED');
+        check(admin.validPIN(input.pin),'The admin PIN is incorrect.',403,'INVALID_ADMIN_PIN');
+        return reply({unlocked:true,adminAccess:admin.configuration(sourceId,input.pin)});
+      }
       if(action==='media'&&method==='GET'){
         const photoId=url.searchParams.get('id');check(isMediaId(photoId),'Photo not found.',404,'PHOTO_NOT_FOUND');
         const projection=await store.get(sourceId);
@@ -240,6 +259,7 @@ export function createMonitorHandler(options:MonitorOptions={}) {
         assertMediaPayload(media);return reply({media});
       }
       if(action==='snapshot'&&method==='GET'){
+        requireAdmin();
         const projection=await store.get(sourceId);check(projection&&!projection.source.revoked,'Workspace not found.',404);
         check(projection!.source.ready,'The initial device upload is still in progress.',409,'INITIAL_UPLOAD_PENDING');
         return reply({source:projection!.source,records:Object.values(projection!.records),settings:projection!.metadata.settings??null,dataVersion:projection!.source.dataVersion??0});
@@ -248,16 +268,22 @@ export function createMonitorHandler(options:MonitorOptions={}) {
         const index=(await store.list()).find(source=>source.sourceId===sourceId);
         check(index?.shared&&!index.revoked&&index.ready,'Enable shared POS for this workspace after its initial upload completes.',409);
         if(Date.now()-new Date(index!.lastSeenAt).getTime()>30000)await store.touch(sourceId,now());
-        if(url.searchParams.get('ifVersion')===String(index!.dataVersion??0))return reply({notModified:true,serverTime:now()});
+        const adminAccess=admin.configuration(sourceId);
+        if(url.searchParams.get('ifVersion')===String(index!.dataVersion??0))return reply({notModified:true,serverTime:now(),adminAccess});
         const projection=await store.get(sourceId);check(projection?.source.shared&&!projection.source.revoked&&projection.source.ready,'Enable shared POS for this workspace after its initial upload completes.',409);
-        const data=await monitorBootstrap(projection!,url.searchParams);data.sync={...data.sync,configured:true,lastSync:projection!.source.updatedAt};return reply({...data,cloudVersion:projection!.source.dataVersion??0,...(url.searchParams.get('includeOffline')==='1'?{offlineState:offlineCloudState(projection!)}:{})});
+        const raw=await monitorBootstrap(projection!,url.searchParams),data=hasAdmin()?raw:redactAdminSnapshot(raw);
+        data.sync={...data.sync,configured:true,lastSync:projection!.source.updatedAt};
+        const offlineState=url.searchParams.get('includeOffline')==='1'?offlineCloudState(projection!):undefined;
+        if(offlineState&&adminAccess.enabled)offlineState.metadata.adminAccess=adminAccess;
+        return reply({...data,adminAccess,cloudVersion:projection!.source.dataVersion??0,...(offlineState?{offlineState}:{})});
       }
       if(action==='offline-commit'&&method==='POST'){
         const input=offlineCommitSchema.parse(body);
+        if(isAdminCommit(input))requireAdmin();
         for(const effect of input.changes){if(effect.before)validateData(effect.before);if(effect.after)validateData(effect.after);}
         // A transport failure may upgrade an unacknowledged online command to
         // offline-completed. The immutable effects still identify one receipt.
-        const {offline:_offline,...identity}=input;
+        const {offline:_offline,adminGrant:_adminGrant,...identity}=input;
         const key=recordKey('offline-command',JSON.stringify([input.deviceId,input.transactionId])),digest=hash(stable(identity));
         const savedPhotos=new Set<string>();
         for(let attempt=0;attempt<6;attempt++){
@@ -291,19 +317,21 @@ export function createMonitorHandler(options:MonitorOptions={}) {
           if(action==='promote'){check(next.source.ready,'Finish the initial upload first.',409);next.source.shared=true;}
           if(action==='command'){
             check(next.source.shared,'Enable shared POS before editing cloud records.',409);
-            const input=z.object({sourceId:id,path:z.string().max(300),method:z.enum(['GET','POST','PUT','PATCH','DELETE']),body:z.record(z.string(),z.unknown()).optional()}).strict().parse(body);
+            const input=z.object({sourceId:id,path:z.string().max(300),method:z.enum(['GET','POST','PUT','PATCH','DELETE']),body:z.record(z.string(),z.unknown()).optional(),adminGrant:z.string().max(10000).optional()}).strict().parse(body);
+            if(isAdminOperation(input.path,input.method,input.body))requireAdmin();
             const commandId=input.body?.commandId;check(input.method==='GET'||typeof commandId==='string'&&commandId.length>=8&&commandId.length<=160,'A durable command ID is required.');
             const key=typeof commandId==='string'?recordKey('command',commandId):'';
-            const digest=hash(stable(input));
-            if(key&&next.commands?.[key]){check(next.commands[key].hash===digest,'Command ID was reused with different data.',409,'IDEMPOTENCY_CONFLICT');await store.publish(next.source);return reply(next.commands[key].response);}
+            const {adminGrant:_adminGrant,...commandIdentity}=input;
+            const digest=hash(stable(commandIdentity));
+            if(key&&next.commands?.[key]){check(next.commands[key].hash===digest,'Command ID was reused with different data.',409,'IDEMPOTENCY_CONFLICT');await store.publish(next.source);return reply(hasAdmin()?next.commands[key].response:redactAdminResult(next.commands[key].response));}
             const path=new URL(input.path,'https://cloud.workspace');
             response=await monitorCommand(next,path.pathname,input.method,input.body??{},path.searchParams);
-            if(input.method==='GET')return reply(response);
+            if(input.method==='GET')return reply(hasAdmin()?response:redactAdminResult(response));
             next.commands??={};next.commands[key]={hash:digest,response};
           }
           next.source.updatedAt=now();next.source.lastSeenAt=now();next.revision++;
           next.source.dataVersion=(next.source.dataVersion??0)+1;
-          if(await store.replace(sourceId,projection!.revision,next))return reply(response);
+          if(await store.replace(sourceId,projection!.revision,next))return reply(hasAdmin()?response:redactAdminResult(response));
         }
         fail('Another device changed this workspace. Refresh and try again.',409,'CLOUD_BUSY');
       }

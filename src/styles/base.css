@@ -883,6 +883,20 @@ textarea::placeholder {
 .app-update-safety svg {flex-shrink:0;margin-top:2px;color:#b7f67a;}
 .app-update-content .error-message {margin-top:16px;}
 .app-update-content .form-actions {flex-wrap:wrap;}
+.admin-logo-button {position:relative;cursor:pointer;border:0;padding:0;flex-shrink:0;}
+.admin-logo-button:focus-visible {outline:2px solid #b7f67a;outline-offset:5px;border-radius:12px;}
+.admin-logo-status {position:absolute;right:-3px;bottom:-3px;display:grid;place-items:center;width:17px;height:17px;border:2px solid #10191a;border-radius:50%;background:#344343;color:#ccd7d0;}
+.admin-logo-status.unlocked {background:#b7f67a;color:#172013;}
+.admin-unlock-symbol {display:grid;place-items:center;width:60px;height:60px;border-radius:18px;border:1px solid #b7f67a25;background:#b7f67a0a;color:#b7f67a;margin-bottom:22px;}
+.admin-unlock-note {font-size:11px;color:#91a095;line-height:1.7;margin-top:18px;}
+.cashier-shift-page {display:grid;gap:28px;}
+.cashier-shift-page .management-eyebrow {font-size:10px;letter-spacing:2px;color:#94a39a;margin-bottom:14px;}
+.cashier-shift-page h1 {font-size:clamp(25px,4vw,36px);letter-spacing:-1px;margin-bottom:12px;}
+.cashier-shift-page p {font-size:12px;line-height:1.6;color:#94a39a;}
+.cashier-shift-page .cash-shift-banner {display:flex;align-items:center;gap:18px;padding:24px;flex-wrap:wrap;}
+.cashier-shift-page .cash-shift-banner > div:nth-child(2) {flex:1;min-width:150px;}
+.cashier-shift-page .cash-shift-banner h2 {font-size:16px;margin-bottom:6px;}
+.cashier-shift-page .cash-shift-icon {display:grid;place-items:center;flex-shrink:0;width:48px;height:48px;border-radius:14px;background:#b7f67a0c;color:#b7f67a;}
 .footer-line {
   display: flex;
   justify-content: space-between;

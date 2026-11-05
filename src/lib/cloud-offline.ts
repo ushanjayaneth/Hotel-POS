@@ -10,6 +10,8 @@ import {handleCashier} from './local/cashier';
 import {handleCatalog} from './local/catalog';
 import {handleMedia} from './local/media';
 import {LocalError, localStorageError, now, requireLocal, sha256, stable, uid, type LocalRequest} from './local/types';
+import {adminGrant,requireAdmin} from './admin-access';
+import {isAdminOperation} from '../../shared/admin-access';
 
 /** A separate replica for each cloud business. It never opens the original
  * independent device database. Offline PIN hashes stay in its private credential
@@ -287,6 +289,7 @@ export class CloudOfflineReplica {
   async api<T = unknown>(inputPath: string, body?: unknown, inputMethod?: string, options: {offline?: boolean} = {}): Promise<T> {
     try {
       const {url, path, method} = normalized(inputPath, body, inputMethod);
+      if(isAdminOperation(path,method,body))requireAdmin(this.sourceId);
       if (path === '/session' && method === 'GET') return {user: await this.session(), demo: false} as T;
       if (path === '/logout' && method === 'POST') {await this.clearSession(); return {ok: true} as T;}
       if (path === '/bootstrap' && method === 'GET') {
@@ -322,7 +325,8 @@ export class CloudOfflineReplica {
         requireLocal(result !== undefined, 'This action needs an internet connection.', 503, 'ONLINE_REQUIRED');
         const createdAt = now(), sequence = ((await store.meta<number>('journalSequence')) ?? 0) + 1;
         const changes = await store.effects();
-        const commit: CloudOfflineCommit = {sourceId: this.sourceId, deviceId: (await store.meta<string>('deviceId'))!, transactionId: commandId, createdAt, path, method, changes, offline: options.offline ?? (typeof navigator !== 'undefined' && navigator.onLine === false)};
+        const grant=isAdminOperation(path,method,payload)?adminGrant(this.sourceId):undefined;
+        const commit: CloudOfflineCommit = {sourceId: this.sourceId, deviceId: (await store.meta<string>('deviceId'))!, transactionId: commandId, createdAt, path, method, changes, offline: options.offline ?? (typeof navigator !== 'undefined' && navigator.onLine === false),...(grant?{adminGrant:grant}:{})};
         requireLocal(changes.length <= 1000 && new TextEncoder().encode(JSON.stringify(commit)).length <= 690_000, path === '/media' ? 'This photo is too large to sync safely. Choose a smaller photo.' : 'This transaction is too large to queue safely. Split it into smaller transactions.', 413, 'OFFLINE_PACKET_TOO_LARGE');
         await this.db.metadata.put({key: 'journalSequence', value: sequence});
         await this.db.metadata.put({key: `${outboxPrefix}${commandId}`, value: {sequence, commit} satisfies PendingCommit});
@@ -398,8 +402,8 @@ export class CloudOfflineReplica {
         await this.db.transaction('rw', this.db.metadata, async () => {
           const current = (await this.db.metadata.get(`${outboxPrefix}${first.commit.transactionId}`))?.value as PendingCommit | undefined;
           if (current) {
-            const {offline: _sentPolicy, ...sent} = first.commit;
-            const {offline: _currentPolicy, ...saved} = current.commit;
+            const {offline: _sentPolicy, adminGrant: _sentApproval, ...sent} = first.commit;
+            const {offline: _currentPolicy, adminGrant: _currentApproval, ...saved} = current.commit;
             requireLocal(stable(sent) === stable(saved), 'The saved transaction changed during upload. It remains queued on this device.', 409, 'OFFLINE_QUEUE_CHANGED');
           }
           await this.db.metadata.delete(`${outboxPrefix}${first.commit.transactionId}`);

@@ -2,6 +2,7 @@ import {CLOUD_MONITOR_KINDS,type CloudChange,type CloudEnrollmentResult} from '.
 import {localDb,type LocalDatabase,type LocalChange} from './local/db';
 import {getLocalUser} from './local/auth';
 import {getLocalWorkspaceInfo} from './local/seed';
+import {observeAdminResponse,lockAdmin} from './admin-access';
 
 const key='cloudMonitor:connection',leaseKey='cloudMonitor:lease';
 const kinds=new Set<string>(CLOUD_MONITOR_KINDS);
@@ -21,13 +22,14 @@ const changed=()=>{if(typeof window!=='undefined')window.dispatchEvent(new Event
 let activeRequests=new AbortController();
 let signedOut=false;
 /** A late session/refresh response must not restore a cookie after Sign out. */
-export function endCloudSession(){signedOut=true;activeRequests.abort();activeRequests=new AbortController();}
+export function endCloudSession(){lockAdmin();signedOut=true;activeRequests.abort();activeRequests=new AbortController();}
 export async function cloudRequest<T>(action:string,body?:unknown,options:RequestInit={}):Promise<T>{
   const operation=action.split('&')[0];
   if(signedOut&&!['status','pos-login','login','pos-logout','logout'].includes(operation))throw Object.assign(new Error('Enter your staff PIN to open this workspace.'),{status:401,code:'UNAUTHENTICATED'});
   let response:Response;
   try{response=await fetch(`/api/cloud?action=${action}`,{credentials:'same-origin',...options,method:body===undefined?'GET':'POST',headers:{...(body===undefined?{}:{'Content-Type':'application/json'}),...options.headers},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.any([options.signal??AbortSignal.timeout(20000),activeRequests.signal])});}catch(error){if(typeof window!=='undefined')window.dispatchEvent(new Event('cloud-failure'));throw error;}
   const result=await response.json().catch(()=>({error:'The cloud service returned an invalid response.'}));
+  if(response.ok)await observeAdminResponse(action,result).catch(()=>{});
   if(!response.ok){lastCloudContact=0;if(typeof window!=='undefined')window.dispatchEvent(new Event('cloud-failure'));throw Object.assign(new Error(result.error??'Cloud request failed.'),{status:response.status,code:result.code});}if(['pos-login','login'].includes(operation))signedOut=false;lastCloudContact=Date.now();if(typeof window!=='undefined')window.dispatchEvent(new Event('cloud-contact'));return result as T;
 }
 function sanitize(value:unknown):unknown {

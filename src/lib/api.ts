@@ -1,12 +1,21 @@
 import {isDeviceWorkspace} from './workspace-mode';
 import {sharedCloudSource,sharedCloudApi} from './cloud-shared';
+import {adminAccess,cashierSnapshot,requireAdmin} from './admin-access';
+import {isAdminOperation,redactAdminResult} from '../../shared/admin-access';
+import type {Snapshot} from '../../shared/types';
 
 export class ApiError extends Error {
   constructor(message: string, public status = 0) { super(message); this.name = 'ApiError'; }
 }
 export async function api<T>(path: string, body?: unknown, method?: string): Promise<T> {
   if(sharedCloudSource()){
-    try{return await sharedCloudApi<T>(path,body,method);}catch(error){const value=error as Error&{status?:number};throw new ApiError(value.message,value.status??0);}
+    try{
+      const source=sharedCloudSource()!;
+      if(isAdminOperation(path,method??(body===undefined?'GET':'POST'),body))requireAdmin(source);
+      const result=await sharedCloudApi<T>(path,body,method);
+      if(path.split('?')[0].replace(/^\/api/,'')==='/bootstrap'&&!adminAccess(source).unlocked)return cashierSnapshot(result as Snapshot) as T;
+      return adminAccess(source).unlocked?result:redactAdminResult(result);
+    }catch(error){const value=error as Error&{status?:number};throw new ApiError(value.message,value.status??0);}
   }
   if(isDeviceWorkspace()){
     try {const {localApi}=await import('./local/core');return await localApi(path,body,method) as T;}

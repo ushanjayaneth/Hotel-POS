@@ -17,13 +17,15 @@ export interface OfflineCloudCommit {
   method:string;
   /** Physical transaction was completed while cloud confirmation was unavailable. */
   offline?:boolean;
+  /** Source-scoped approval for an administrative change completed offline. */
+  adminGrant?:string;
   changes:OfflineCloudEffect[];
 }
 export interface OfflineCloudState {
   sourceId:string;
   cloudVersion:number;
   records:CloudChange[];
-  metadata:{settings:unknown;activeBranchId:string;deviceId:string};
+  metadata:{settings:unknown;activeBranchId:string;deviceId:string;adminAccess?:import('./admin-access.js').AdminAccessConfiguration};
 }
 export interface OfflineCloudResult {
   ok:true;

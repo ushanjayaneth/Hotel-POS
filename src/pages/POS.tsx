@@ -1091,13 +1091,13 @@ export default function POS({
           }}
         />
       )}
-      {categoryDialog && (
+      {canManageCatalog && categoryDialog && (
         <CategoryDialog
           onClose={() => setCategoryDialog(false)}
           onCreated={(id) => setCategory(id)}
         />
       )}
-      {productDialog && (
+      {canManageCatalog && productDialog && (
         <ProductDialog
           onClose={() => setProductDialog(false)}
           categoryId={category === "all" ? undefined : category}

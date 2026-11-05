@@ -81,6 +81,8 @@ A static frontend also supports an independent **device workspace** without a ba
 
 On each shared device, one successful online **Staff PIN** entry also prepares that same PIN for offline sign-in. Logging out does not erase the local PIN hash, cached records or pending transactions. The same PIN unlocks the prepared device offline after logout or reload. Initial setup and recovery after site-data clearing need internet again; installation is optional.
 
+An optional server-only `CLOUD_ADMIN_PIN` enables a separate logo-based admin lock. Cashiers keep billing, printing, loans, collections and shift controls; financial reports, costs, catalog/stock editing, purchases, production and business settings require unlock. Select the sidebar hotel logo to enter the private admin PIN, or select it again to lock. Access resets on reload and is independent in each window. A normally prepared device can first unlock offline; approved queued edits retain their approval for later sync. See [the owner guide](docs/OWNER-QUICK-START.md#unlock-administration) for stock edits and the device privacy boundary.
+
 The optional [Render backend guide](docs/HOSTING-VERCEL-RENDER.md) describes the separate SQLite hub topology. Its persistent-disk requirement applies to that topology; the files in `deployment/` are inactive templates.
 
 Settings saves text size, shortcuts and receipt alignment on each browser/device. Defaults include F2 search, F3 new bill, F4 hold, F8 payment, F9 kitchen, F10 receipt and Alt+0 settings; open the keyboard icon for the current assignments. Back closes the most recent dialog, drawer or POS filter before returning to the previous workspace screen. It does not reverse a saved sale or prevent a user from closing a browser tab.

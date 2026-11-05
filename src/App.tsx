@@ -61,6 +61,8 @@ import {authorizeOfflinePIN,authorizeOfflineSession,clearOfflineSession,getOffli
 import {cloudPOSUser,cloudRuntimeApi,retryCloudConnection} from './lib/cloud-runtime';
 import {requestDevicePersistence} from './lib/local/storage';
 import ConnectivityStatus from './components/ConnectivityStatus';
+import {adminPages,cashierSnapshot,hydrateAdminAccess,lockAdmin,unlockAdmin,useAdminAccess} from './lib/admin-access';
+import CashierShift from './components/CashierShift';
 
 const Management = lazy(() => import('./pages/Management'));
 
@@ -119,12 +121,10 @@ const allowedPages: Record<string, string[]> = {
   kitchen: ["kitchen", "settings"],
   storekeeper: ["products", "inventory", "production", "purchases", "settings"],
 };
-function Brand() {
+function Brand({onAdmin,unlocked=false}:{onAdmin?:()=>void;unlocked?:boolean}={}) {
   return (
     <div className="brand">
-      <div className="brand-mark">
-        <img src="/icons/app-icon-192.png" alt="" width="42" height="42" />
-      </div>
+      {onAdmin?<button type="button" className="brand-mark admin-logo-button" aria-label={unlocked?'Lock admin access':'Unlock admin access'} title={unlocked?'Lock admin access':'Unlock admin access'} aria-pressed={unlocked} onClick={onAdmin}><img src="/icons/app-icon-192.png" alt="" width="42" height="42"/><span className={`admin-logo-status ${unlocked?'unlocked':''}`}><LockKeyhole size={10}/></span></button>:<div className="brand-mark"><img src="/icons/app-icon-192.png" alt="" width="42" height="42" /></div>}
       <div className="brand-wordmark">
         <div className="brand-name">DEMO HOTEL</div>
         <span className="brand-caption">RESTAURANT WORKSPACE</span>
@@ -260,6 +260,19 @@ function Login({ onLogin,onSetup,onRestore,deviceInfo=null,cloudLogin }: { onLog
 
 function WorkspaceApp() {
   const mode=useWorkspaceMode();
+  const admin=useAdminAccess(sharedCloudSource());
+  const adminLocked=admin.enabled&&!admin.unlocked;
+  const [adminDialog,setAdminDialog]=useState(false);
+  const [adminPin,setAdminPin]=useState('');
+  const [adminBusy,setAdminBusy]=useState(false);
+  const [adminError,setAdminError]=useState('');
+  useEffect(()=>{
+    const source=sharedCloudSource();if(!source)return;
+    void hydrateAdminAccess(source).catch(()=>{});
+    const required=(event:Event)=>{if((event as CustomEvent<{sourceId:string}>).detail?.sourceId===source){setAdminError('');setAdminDialog(true);}};
+    window.addEventListener('admin-access-required',required);
+    return()=>window.removeEventListener('admin-access-required',required);
+  },[]);
   const deviceMode=mode==='device'&&!sharedCloudSource();
   const [deviceInfo,setDeviceInfo]=useState<LocalWorkspaceInfo|null>(null);
   const [deviceSetup,setDeviceSetup]=useState(false);
@@ -573,10 +586,10 @@ function WorkspaceApp() {
   }, [refresh]);
   useEffect(() => {
     if (!user) return;
-    const permitted = allowedPages[user.role] || ["pos"];
+    const permitted = (allowedPages[user.role] || ["pos"]).filter(value=>!adminLocked||!adminPages.has(value));
     if(sharedCloudSource()&&page==='team'){routeTo('pos',null,true);return;}
     if (!permitted.includes(page)) routeTo(permitted[0] as Page,null,true);
-  }, [user, page,routeTo]);
+  }, [user, page,routeTo,adminLocked]);
   const mutate = useCallback(
     async <T,>(path: string, body?: unknown, method?: string): Promise<T> => {
       localWrites.current++;
@@ -587,6 +600,7 @@ function WorkspaceApp() {
     [refresh],
   );
   function navigate(next: Page) {
+    if(adminLocked&&adminPages.has(next)){setAdminError('');setAdminDialog(true);return;}
     routeTo(next);
     setMobileNav(false);
     setNotifications(false);
@@ -617,7 +631,7 @@ function WorkspaceApp() {
     };
     window.addEventListener('keydown',handler);
     return()=>window.removeEventListener('keydown',handler);
-  },[user,page,preferences.shortcuts,receiptId,back,routeTo,notify]);
+  },[user,page,preferences.shortcuts,receiptId,back,routeTo,notify,adminLocked]);
   async function logout() {
     try {
       await api("/logout", {});
@@ -661,14 +675,14 @@ function WorkspaceApp() {
   const title =
     navigation.flatMap((n) => n.items).find((n) => n.id === page)?.label ||
     "Workspace";
-  const visiblePages = allowedPages[user.role] || ["pos"];
+  const visiblePages = (allowedPages[user.role] || ["pos"]).filter(value=>!adminLocked||!adminPages.has(value));
   const activeOrders = data.orders.filter(
     (o) => !["completed", "cancelled"].includes(o.status),
   );
   const lowStock = data.inventory.filter((i) => i.quantity <= i.minimum);
   const receipt = data.orders.find((o) => o.id === receiptId);
   const context = {
-    data: { ...data, sync: { ...data.sync, hubOnline } },
+    data: { ...(adminLocked?cashierSnapshot(data):data), sync: { ...data.sync, hubOnline } },
     branchId,
     locale: "en" as const,
     t: (en: string, _si: string) => en,
@@ -685,7 +699,10 @@ function WorkspaceApp() {
           <div className="mobile-overlay" onClick={() => setMobileNav(false)} />
         )}
         <aside className={`sidebar ${mobileNav ? "mobile-open" : ""}`}>
-          <Brand />
+          <Brand onAdmin={admin.enabled?()=>{
+            if(admin.unlocked){lockAdmin(sharedCloudSource());if(adminPages.has(page))routeTo('pos',null,true);notify('Admin access locked.');}
+            else{setAdminError('');setAdminPin('');setAdminDialog(true);}
+          }:undefined} unlocked={admin.unlocked}/>
           <nav className="sidebar-scroll" aria-label="Main navigation">
             {navigation.map((group) => (
               <div key={group.label}>
@@ -723,7 +740,7 @@ function WorkspaceApp() {
               <div className="avatar">{user.initials}</div>
               <div className="user-details">
                 <strong>{user.name}</strong>
-                <small>{user.role}</small>
+                <small>{admin.enabled?(adminLocked?'Cashier mode':'Admin unlocked'):user.role}</small>
               </div>
               <button
                 className="logout-button"
@@ -843,7 +860,7 @@ function WorkspaceApp() {
                 saved data; new orders stay as drafts until you reconnect.
               </div>
             )}
-            {page === "pos" ? (
+            {adminLocked&&adminPages.has(page)?<Spinner label="Opening the register"/>:page === "pos" ? (
               <POS
                 selectedOrderId={selectedOrder}
                 onSelectOrder={setSelectedOrder}
@@ -867,7 +884,7 @@ function WorkspaceApp() {
                 }}
               />
             ) : page==='settings'&&!['owner','manager'].includes(user.role) ? <><div className="page-heading"><div><div className="eyebrow">MAKE IT YOURS</div><h1>Settings<span className="heading-period">.</span></h1><p className="page-subtitle">Display, shortcuts, receipts and devices.</p></div></div><WorkspacePreferences/></> : (
-              <Suspense fallback={<Spinner label="Opening page"/>}><Management page={page} /></Suspense>
+              adminLocked&&page==='finance'?<CashierShift/>:adminLocked&&page==='settings'?<WorkspacePreferences/>:<Suspense fallback={<Spinner label="Opening page"/>}><Management page={page} /></Suspense>
             )}
             <div className="footer-line">
               <span>
@@ -913,6 +930,15 @@ function WorkspaceApp() {
         />
       )}
       {shortcutHelp&&<Modal title="Keyboard shortcuts" subtitle="Your current shortcuts for this device." onClose={()=>setShortcutHelp(false)} wide><div className="shortcut-help">{shortcutActions.map(action=><div key={action.id}><span>{action.label}</span><kbd>{preferences.shortcuts[action.id]}</kbd></div>)}</div><div className="form-actions"><button className="button button-ghost" onClick={()=>{setShortcutHelp(false);navigate('settings');}}>Customize in Settings</button><button className="button button-primary" onClick={()=>setShortcutHelp(false)}>Done</button></div></Modal>}
+      {adminDialog&&<Modal title="Unlock admin access" subtitle="Enter the admin PIN to view private reports and manage products and stock." onClose={()=>{if(adminBusy)return false;setAdminDialog(false);setAdminPin('');}}>
+        <form onSubmit={event=>{event.preventDefault();if(adminBusy)return;const source=sharedCloudSource();if(!source)return;setAdminBusy(true);setAdminError('');void unlockAdmin(source,adminPin).then(async()=>{await refresh(true);setAdminDialog(false);setAdminPin('');notify('Admin access unlocked.');}).catch(error=>setAdminError((error as Error).message)).finally(()=>setAdminBusy(false));}}>
+          <div className="admin-unlock-symbol"><ShieldCheck size={28}/></div>
+          <label className="field"><span>Admin PIN</span><input className="input pin-input" type="password" inputMode="numeric" pattern="[0-9]{4,16}" minLength={4} maxLength={16} required autoComplete="off" value={adminPin} disabled={adminBusy} onChange={event=>{setAdminPin(event.target.value.replace(/\D/g,''));setAdminError('');}} placeholder="••••"/></label>
+          {adminError&&<div className="error-message" role="alert">{adminError}</div>}
+          <p className="admin-unlock-note">Admin access applies to this window. Select the hotel logo again to lock it.</p>
+          <div className="form-actions"><button type="button" className="button button-ghost" disabled={adminBusy} onClick={()=>{setAdminDialog(false);setAdminPin('');}}>Cancel</button><button className="button button-primary" disabled={adminBusy||adminPin.length<4}><LockKeyhole size={16}/>{adminBusy?'Unlocking…':'Unlock admin'}</button></div>
+        </form>
+      </Modal>}
       {updateReady && updateOpen && <Modal title="Update available" subtitle="A newer version of your workspace is ready." onClose={() => {if(updateBusy)return false;updateDismissed.current=true;setUpdateOpen(false);}}>
         <div className="app-update-content" aria-busy={updateBusy}>
           <div className={`app-update-symbol ${updateBusy?'is-updating':''}`} aria-hidden="true"><RefreshCw size={30} className={updateBusy?'spin':''}/></div>

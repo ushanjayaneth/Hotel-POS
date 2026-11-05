@@ -1,6 +1,8 @@
 import type {Snapshot,User} from '../../shared/types';
 import type {OfflineCloudState} from '../../shared/offline-cloud';
 import {cloudRequest,endCloudSession} from './cloud-sync';
+import {adminGrant,hydrateAdminAccess,lockAdmin} from './admin-access';
+import {isAdminOperation} from '../../shared/admin-access';
 import {authorizeOfflinePIN,authorizeOfflineSession,cacheCloudState,clearOfflineSession,getOfflineStatus,isCloudOfflineMutation,markCloudCommandOffline,offlineApi,offlineSession,offlineSignIn,rollbackCloudCommand,syncCloudOutbox,withCloudOfflineLock} from './cloud-offline';
 
 export const cloudPOSUser:User={id:'cloud-owner',name:'Administrator',initials:'A',role:'owner',branchId:null};
@@ -32,7 +34,10 @@ function failedConnection(sourceId:string){
 }
 async function transport<T>(sourceId:string,action:string,body?:unknown,timeout=8000):Promise<T>{
   try{
-    const result=await cloudRequest<T>(action,body,{signal:AbortSignal.timeout(timeout)});
+    const command=body as {path?:string;method?:string;body?:unknown}|undefined;
+    const grant=adminGrant(sourceId);
+    const adminCommand=action==='command'&&command?.path&&isAdminOperation(command.path,command.method??'GET',command.body);
+    const result=await cloudRequest<T>(action,grant&&adminCommand?{...command,adminGrant:grant}:body,{signal:AbortSignal.timeout(timeout),...(grant?{headers:{'x-pos-admin-grant':grant}}:{})});
     failures.delete(sourceId);connectedSources.add(sourceId);return result;
   }catch(error){if(retryable(error))failedConnection(sourceId);throw error;}
 }
@@ -56,7 +61,7 @@ async function bootstrapCloud(sourceId:string,url:URL):Promise<Snapshot>{
   if(state.pending){
     const result=await withCloudOfflineLock(sourceId,()=>flush(sourceId,true));
     if(result.pending){
-      if(result.status===401||result.status===403)throw Object.assign(new Error('Enter your staff PIN to upload your saved bills.'),{status:401});
+      if((result.status===401||result.status===403)&&result.code!=='ADMIN_LOCKED')throw Object.assign(new Error('Enter your staff PIN to upload your saved bills.'),{status:401});
       return localSnapshot(sourceId,url.pathname+url.search,Boolean(result.status&&result.status<500));
     }
   }
@@ -137,6 +142,7 @@ export async function cloudRuntimeApi<T>(sourceId:string,path:string,body?:unkno
   const url=new URL(path.replace(/^\/api(?=\/)/,''),'https://workspace');
   const method=(inputMethod??(body===undefined?'GET':'POST')).toUpperCase();
   if(url.pathname==='/session'){
+    void hydrateAdminAccess(sourceId).catch(()=>{});
     if(locked(sourceId))return {user:null,demo:false} as T;
     const user=await offlineSession(sourceId);
     if(!online()||coolingDown(sourceId))return {user,demo:false} as T;
@@ -158,6 +164,7 @@ export async function cloudRuntimeApi<T>(sourceId:string,path:string,body?:unkno
     return {user:cloudPOSUser,demo:false} as T;
   }
   if(url.pathname==='/logout'){
+    lockAdmin(sourceId);
     try{localStorage.setItem(`dh-cloud-lock:${sourceId}`,'1');}catch{/* Cached authorization is still cleared. */}
     endCloudSession();await clearOfflineSession(sourceId);
     if(online())try{await transport(sourceId,'pos-logout',{},2000);}catch(error){if(!retryable(error))throw error;}
@@ -176,7 +183,7 @@ export async function cloudRuntimeApi<T>(sourceId:string,path:string,body?:unkno
       let connected=online()&&!coolingDown(sourceId);
       if(connected&&(await getOfflineStatus(sourceId)).pending){
         const previous=await flush(sourceId,true);
-        if(previous.status===401||previous.status===403)throw Object.assign(new Error('Enter your staff PIN to sync your saved bills.'),{status:401});
+        if((previous.status===401||previous.status===403)&&previous.code!=='ADMIN_LOCKED')throw Object.assign(new Error('Enter your staff PIN to sync your saved bills.'),{status:401});
         if(previous.pending)connected=false;
       }
       const payload={...body as object,commandId:(body as {commandId?:string})?.commandId??`command-${crypto.randomUUID()}`};

@@ -279,6 +279,8 @@ export function ProductDialog({
     linkedStock?.category === "resale" ? "resale" : "prepared",
   );
   const [quantity, setQuantity] = useState(String(linkedStock?.quantity ?? 0));
+  const openingQuantity = useRef(linkedStock?.quantity ?? 0);
+  const [quantityEdited, setQuantityEdited] = useState(false);
   const [manageStock, setManageStock] = useState(
     item ? Boolean(linkedStock) : true,
   );
@@ -338,21 +340,21 @@ export function ProductDialog({
         const requested = Number(quantity);
         if (!Number.isFinite(requested) || requested < 0)
           throw new Error("Enter a valid, non-negative stock quantity.");
-        if (linkedStock) {
+        if (linkedStock && (quantityEdited || linkedStock.minimum !== payload.reorderLevel || linkedStock.unitCost !== payload.cost)) {
           await mutate(
             `/inventory/${linkedStock.id}`,
             {
               commandId: stockRequestId,
               branchId,
-              quantity: requested,
+              quantity: quantityEdited ? requested : linkedStock.quantity,
               minimum: payload.reorderLevel,
               unitCost: payload.cost,
-              expectedQuantity: linkedStock.quantity,
+              expectedQuantity: quantityEdited ? openingQuantity.current : linkedStock.quantity,
               reason: "Product stock count updated",
             },
             "PATCH",
           );
-        } else {
+        } else if (!linkedStock) {
           await mutate("/inventory", {
             commandId: stockRequestId,
             branchId,
@@ -620,7 +622,10 @@ export function ProductDialog({
                       step="0.001"
                       required
                       value={quantity}
-                      onChange={(event) => setQuantity(event.target.value)}
+                      onChange={(event) => {
+                        setQuantity(event.target.value);
+                        setQuantityEdited(true);
+                      }}
                     />
                     {linkedStock && (
                       <small>
