@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   ArrowRight,
   ArrowUpRight,
@@ -44,18 +44,14 @@ import { browserDb } from "./lib/db";
 import { Spinner, Modal } from "./components/ui";
 import POS from "./pages/POS";
 import { Orders, Kitchen, Tables, Receipt } from "./pages/Operations";
-import Products from './pages/Products';
 import HeldBills from './pages/HeldBills';
-import {WorkspacePreferences} from './components/WorkspacePreferences';
 import {NavigationProvider,useNavigation,useBackLayer} from './lib/navigation';
 import {useDevicePreferences,shortcutActions,keyboardCombination,dispatchShortcut,type ShortcutAction} from './lib/preferences';
 import {useWorkspaceMode,setWorkspaceMode,readSavedWorkspaceMode} from './lib/workspace-mode';
 import {getLocalWorkspaceInfo,type LocalWorkspaceInfo} from './lib/local/core';
-import {recoverRestoredDrafts} from './lib/local/backup';
-import {DeviceSetup,InitialDeviceRestore} from './components/DeviceSetup';
 import {syncLocalProductPhotos} from './lib/media';
 import {flushBeforeAppUpdate} from './lib/update-safety';
-import {sharedCloudSource} from './lib/cloud-shared';
+import {openSharedCloudWorkspace,sharedCloudSource,subscribeSharedCloudSource} from './lib/cloud-shared';
 import {cloudRequest,openAutomaticCloudWorkspace,syncDeviceCloud} from './lib/cloud-sync';
 import {authorizeOfflinePIN,authorizeOfflineSession,clearOfflineSession,getOfflineStatus,hasOfflinePIN,offlineSession,offlineSignIn} from './lib/cloud-offline';
 import {cloudPOSUser,cloudRuntimeApi,retryCloudConnection} from './lib/cloud-runtime';
@@ -65,6 +61,10 @@ import {adminPages,cashierSnapshot,hydrateAdminAccess,lockAdmin,unlockAdmin,useA
 import CashierShift from './components/CashierShift';
 
 const Management = lazy(() => import('./pages/Management'));
+const Products = lazy(() => import('./pages/Products'));
+const WorkspacePreferences = lazy(() => import('./components/WorkspacePreferences').then(module=>({default:module.WorkspacePreferences})));
+const DeviceSetup = lazy(() => import('./components/DeviceSetup').then(module=>({default:module.DeviceSetup})));
+const InitialDeviceRestore = lazy(() => import('./components/DeviceSetup').then(module=>({default:module.InitialDeviceRestore})));
 
 // Optional UI preferences must never block access to committed business records.
 const uiStorage = {
@@ -468,11 +468,12 @@ function WorkspaceApp() {
     setBranchId(uiStorage.getItem(sharedCloudSource()?`dh-cloud-branch:${sharedCloudSource()}`:deviceMode?'dh-device-branch':'dh-branch')||'b1');
     void (async()=>{
       void requestDevicePersistence().catch(()=>{});
+      if(sharedCloudSource())return api<{user:User|null}>('/session');
       const info=await getLocalWorkspaceInfo().catch(()=>null);
       if(!active)return null;
       setDeviceInfo(info);
       if(info&&!sharedCloudSource()&&!readSavedWorkspaceMode()&&!deviceMode){setWorkspaceMode('device');return null;}
-      if(deviceMode)await recoverRestoredDrafts();
+      if(deviceMode)await (await import('./lib/local/backup')).recoverRestoredDrafts();
       return api<{user:User|null}>('/session');
     })()
       .then((result) => {
@@ -652,7 +653,7 @@ function WorkspaceApp() {
   }
   if (starting) return <Spinner />;
   if (!user&&sharedCloudSource())return <CloudPOSEntry source={sharedCloudSource()!}/>;
-  if (!user) return <><Login onLogin={onLogin} onSetup={()=>setDeviceSetup(true)} onRestore={()=>setDeviceRestore(true)} deviceInfo={deviceInfo}/>{deviceSetup&&<DeviceSetup onClose={()=>setDeviceSetup(false)} onComplete={(next)=>{setDeviceSetup(false);setBranchId('b1');setUser(next);uiStorage.setItem('dh-device-last-user',JSON.stringify(next));void getLocalWorkspaceInfo().then(setDeviceInfo);}}/>}{deviceRestore&&<InitialDeviceRestore onClose={()=>setDeviceRestore(false)}/>}</>;
+  if (!user) return <><Login onLogin={onLogin} onSetup={()=>setDeviceSetup(true)} onRestore={()=>setDeviceRestore(true)} deviceInfo={deviceInfo}/><Suspense fallback={<Spinner label="Opening device setup"/>}>{deviceSetup&&<DeviceSetup onClose={()=>setDeviceSetup(false)} onComplete={(next)=>{setDeviceSetup(false);setBranchId('b1');setUser(next);uiStorage.setItem('dh-device-last-user',JSON.stringify(next));void getLocalWorkspaceInfo().then(setDeviceInfo);}}/>}{deviceRestore&&<InitialDeviceRestore onClose={()=>setDeviceRestore(false)}/>}</Suspense></>;
   if (!data || data.branch.id !== branchId) {
     if (loadError)
       return (
@@ -860,7 +861,7 @@ function WorkspaceApp() {
                 saved data; new orders stay as drafts until you reconnect.
               </div>
             )}
-            {adminLocked&&adminPages.has(page)?<Spinner label="Opening the register"/>:page === "pos" ? (
+            <Suspense fallback={<Spinner label="Opening page"/>}>{adminLocked&&adminPages.has(page)?<Spinner label="Opening the register"/>:page === "pos" ? (
               <POS
                 selectedOrderId={selectedOrder}
                 onSelectOrder={setSelectedOrder}
@@ -885,7 +886,7 @@ function WorkspaceApp() {
               />
             ) : page==='settings'&&!['owner','manager'].includes(user.role) ? <><div className="page-heading"><div><div className="eyebrow">MAKE IT YOURS</div><h1>Settings<span className="heading-period">.</span></h1><p className="page-subtitle">Display, shortcuts, receipts and devices.</p></div></div><WorkspacePreferences/></> : (
               adminLocked&&page==='finance'?<CashierShift/>:adminLocked&&page==='settings'?<WorkspacePreferences/>:<Suspense fallback={<Spinner label="Opening page"/>}><Management page={page} /></Suspense>
-            )}
+            )}</Suspense>
             <div className="footer-line">
               <span>
                 <ShieldCheck size={10} /> {deviceMode?'Device workspace · Saved locally':'Local-first restaurant workspace'}
@@ -975,7 +976,7 @@ function CloudPOSEntry({source}:{source?:string}){
       const [user,state,hasPIN]=await Promise.all([offlineSession(remembered),getOfflineStatus(remembered),hasOfflinePIN(remembered)]);
       if((!user&&!hasPIN)||!state.ready)return false;
       if(!active)return true;
-      if(!source)location.replace(`/?shared=${encodeURIComponent(remembered)}`);
+      if(!source)openSharedCloudWorkspace(remembered);
       else setAuthenticated(Boolean(user)&&uiStorage.getItem(`dh-cloud-lock:${remembered}`)!=='1');
       return true;
     };
@@ -1001,7 +1002,7 @@ function CloudPOSEntry({source}:{source?:string}){
       if(!active)return;
       if(!workspace)throw new Error('Your shop data is still connecting. Keep this device online and try again.');
       uiStorage.setItem('dh-cloud-preferred-source',workspace);
-      location.replace(`/?shared=${encodeURIComponent(workspace)}`);
+      openSharedCloudWorkspace(workspace);
     }).catch(error=>{
       if(!active)return;
       if((error as Error&{status?:number}).status===401)setAuthenticated(false);
@@ -1015,7 +1016,7 @@ function CloudPOSEntry({source}:{source?:string}){
       if(!remembered)throw new Error('Sign in once while online to prepare offline access.');
       await offlineSignIn(remembered,pin);
       uiStorage.removeItem(`dh-cloud-lock:${remembered}`);
-      if(source)location.reload();else location.replace(`/?shared=${encodeURIComponent(remembered)}`);
+      if(source)location.reload();else openSharedCloudWorkspace(remembered);
       return;
     }
     try{await cloudRequest('pos-login',{pin},remembered?{signal:AbortSignal.timeout(2000)}:{});}
@@ -1023,7 +1024,7 @@ function CloudPOSEntry({source}:{source?:string}){
       const status=(error as {status?:number}).status;
       if(remembered&&(!status||status>=500)&&await hasOfflinePIN(remembered)){
         await offlineSignIn(remembered,pin);uiStorage.removeItem(`dh-cloud-lock:${remembered}`);
-        location.replace(`/?shared=${encodeURIComponent(remembered)}`);return;
+        if(source)location.replace(`/?shared=${encodeURIComponent(remembered)}`);else openSharedCloudWorkspace(remembered);return;
       }
       throw error;
     }
@@ -1032,7 +1033,7 @@ function CloudPOSEntry({source}:{source?:string}){
     await authorizeOfflinePIN(workspace,pin,cloudPOSUser);
     uiStorage.removeItem(`dh-cloud-lock:${workspace}`);
     uiStorage.setItem('dh-cloud-preferred-source',workspace);
-    location.replace(`/?shared=${encodeURIComponent(workspace)}`);
+    if(source)location.replace(`/?shared=${encodeURIComponent(workspace)}`);else openSharedCloudWorkspace(workspace);
   };
   if(authenticated===false)return <Login cloudLogin={signIn}/>;
   if(error)return <div className="boot-error panel"><h2>Let’s reconnect your workspace.</h2><p role="alert">{error}</p><button className="button button-primary" onClick={()=>setAttempt(value=>value+1)}><RefreshCw size={14}/> Try again</button></div>;
@@ -1072,8 +1073,9 @@ function AutomaticCloudEntry(){
   return configured?<CloudPOSEntry/>:<NavigationProvider><WorkspaceApp/></NavigationProvider>;
 }
 export default function App(){
+  const source=useSyncExternalStore(subscribeSharedCloudSource,sharedCloudSource,()=>null);
   const params=new URLSearchParams(location.search);
   useEffect(()=>{if(params.has('local'))uiStorage.removeItem('dh-cloud-preferred-source');},[]);
-  if(sharedCloudSource())return <CloudPOSEntry source={sharedCloudSource()!}/>;
+  if(source)return <CloudPOSEntry key={source} source={source}/>;
   return params.has('local')?<NavigationProvider><WorkspaceApp/></NavigationProvider>:<AutomaticCloudEntry/>;
 }

@@ -889,6 +889,7 @@ textarea::placeholder {
 .admin-logo-status.unlocked {background:#b7f67a;color:#172013;}
 .admin-unlock-symbol {display:grid;place-items:center;width:60px;height:60px;border-radius:18px;border:1px solid #b7f67a25;background:#b7f67a0a;color:#b7f67a;margin-bottom:22px;}
 .admin-unlock-note {font-size:11px;color:#91a095;line-height:1.7;margin-top:18px;}
+.product-photo-empty{display:block;background:linear-gradient(135deg,rgba(255,255,255,.05),rgba(255,255,255,.015));min-width:24px;min-height:24px}
 .cashier-shift-page {display:grid;gap:28px;}
 .cashier-shift-page .management-eyebrow {font-size:10px;letter-spacing:2px;color:#94a39a;margin-bottom:14px;}
 .cashier-shift-page h1 {font-size:clamp(25px,4vw,36px);letter-spacing:-1px;margin-bottom:12px;}

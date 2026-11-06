@@ -46,7 +46,9 @@ export async function bootstrap(store: LocalStore, user: User, query: URLSearchP
     const recipe = recipes.find(recipe => recipe.id === item.id);
     return Boolean(recipe?.ingredients.length && recipe.ingredients.every(line => (ingredient(line.key)?.quantity ?? 0) >= line.quantity));
   };
-  const balance = (customerId: string) => credits.filter(entry=>entry.customerId===customerId).reduce((sum,entry)=>sum+(entry.type==='sale'?entry.amount:-entry.amount),0);
+  const balances=new Map<string,number>();
+  for(const entry of credits)balances.set(entry.customerId,(balances.get(entry.customerId)??0)+(entry.type==='sale'?entry.amount:-entry.amount));
+  const balance=(customerId:string)=>balances.get(customerId)??0;
   return {
     user,branches:branches.filter(branch=>user.role==='owner'||branch.id===user.branchId),branch:branches.find(branch=>branch.id===branchId)!,categories,
     menu:menu.map(item=>{const stock=productStockState(item,inventory,recipes,branchId);return {...item,reorderLevel:item.reorderLevel??stock.threshold,cost:maySeeCosts?item.cost:0,enabled:item.available,available:sellable(item),stockQuantity:stock.quantity,lowStock:stock.low};}),recipes:isStore?recipes:[],tables,

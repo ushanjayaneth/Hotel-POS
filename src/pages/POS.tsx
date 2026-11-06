@@ -1,7 +1,7 @@
 import ProductPhoto from '../components/ProductPhoto';
 import NumberPad from '../components/NumberPad';
 import {deviceDraftId} from '../lib/workspace-mode';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
   Check,
@@ -38,11 +38,13 @@ import { usePOS } from "../lib/context";
 import { browserDb } from "../lib/db";
 import { commandId, money, number, time } from "../lib/format";
 import {productStockState} from '../../shared/stock';
-import { Modal, StatusBadge } from "../components/ui";
+import { Modal, Spinner, StatusBadge } from "../components/ui";
 import { useBackLayer } from "../lib/navigation";
 import { useDevicePreferences, type ShortcutAction } from "../lib/preferences";
-import { CategoryDialog, ProductDialog } from "./Products";
 import {registerAppUpdateGuard, saveDraftBeforeUpdate} from '../lib/update-safety';
+
+const CategoryDialog=lazy(()=>import('./Products').then(module=>({default:module.CategoryDialog})));
+const ProductDialog=lazy(()=>import('./Products').then(module=>({default:module.ProductDialog})));
 
 const categoryIcons: Record<string, typeof Grid2X2> = {
   rice: CookingPot,
@@ -1092,16 +1094,16 @@ export default function POS({
         />
       )}
       {canManageCatalog && categoryDialog && (
-        <CategoryDialog
+        <Suspense fallback={<Spinner label="Opening category"/>}><CategoryDialog
           onClose={() => setCategoryDialog(false)}
           onCreated={(id) => setCategory(id)}
-        />
+        /></Suspense>
       )}
       {canManageCatalog && productDialog && (
-        <ProductDialog
+        <Suspense fallback={<Spinner label="Opening product"/>}><ProductDialog
           onClose={() => setProductDialog(false)}
           categoryId={category === "all" ? undefined : category}
-        />
+        /></Suspense>
       )}
       {newOrderDialog && (
         <Modal

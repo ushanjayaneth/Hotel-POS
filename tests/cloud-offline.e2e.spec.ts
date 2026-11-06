@@ -16,6 +16,8 @@ test('a prepared browser opens the normal app address and local reports before s
   let release=()=>{};
   const gate=new Promise<void>(resolve=>{release=resolve;});
   const actions:string[]=[];
+  let documentLoads=0;
+  page.on('request',request=>{if(request.isNavigationRequest()&&request.frame()===page.mainFrame())documentLoads++;});
   try{
     await page.route('**/api/cloud?**',async route=>{
       actions.push(new URL(route.request().url()).searchParams.get('action')??'');
@@ -27,6 +29,7 @@ test('a prepared browser opens the normal app address and local reports before s
     await expect(page.getByRole('button',{name:'Add Chicken rice & curry',exact:true})).toBeVisible({timeout:3000});
     const openingMs=Date.now()-started;
     expect(openingMs).toBeLessThan(3000);
+    expect(documentLoads,'A remembered shop should open without loading the whole app a second time.').toBe(1);
     await expect(page.getByLabel('Staff PIN',{exact:true})).toHaveCount(0);
     expect(actions).not.toContain('workspace');
     const reportsStarted=Date.now();
@@ -39,9 +42,12 @@ test('a prepared browser opens the normal app address and local reports before s
 
     await counter.setOffline(true);
     const reopened=await counter.newPage();
+    let offlineDocumentLoads=0;
+    reopened.on('request',request=>{if(request.isNavigationRequest()&&request.frame()===reopened.mainFrame())offlineDocumentLoads++;});
     reopened.on('pageerror',error=>errors.push(error.message));
     await reopened.goto(origin);
     await expect(reopened.getByRole('heading',{level:1,name:/Point of sale/})).toBeVisible();
+    expect(offlineDocumentLoads).toBe(1);
     expect(await reopened.evaluate(()=>navigator.onLine)).toBe(false);
     await navigate(reopened,'Reports');
     await expect(reopened.getByRole('button',{name:'Profit CSV',exact:true})).toBeEnabled();

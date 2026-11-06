@@ -15,6 +15,8 @@ Closing the shared POS, locking the phone or installing an app update keeps this
 
 A prepared browser opens its saved shop records immediately, including when started without internet. Cloud verification and fresh records load in the background. Online stock and payment acceptance checks still run before confirming an online transaction.
 
+Opening the remembered shop from the app icon now stays in the same page instead of reloading the whole app again. Product editors, settings, device setup and backup tools load when needed; offline preparation caches their code as well.
+
 ## Unlock administration
 
 In a shared cloud shop with the admin lock enabled, the workspace opens in **Cashier mode**. Select the hotel logo at the top of the sidebar and enter your separate private **Admin PIN**. On a phone, open the navigation menu to reach the logo. An unlocked window shows reports, profit and cost information, catalog editing, purchases, inventory, production and business settings. Normal billing, customer loans and repayments remain available while locked; **Day end & expenses** shows only cash-shift opening and closing.

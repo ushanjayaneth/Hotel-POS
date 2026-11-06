@@ -142,6 +142,9 @@ export class CloudOfflineReplica {
     return (await this.db.metadata.where('key').startsWith(outboxPrefix).toArray())
       .map(row => row.value as PendingCommit).sort((a, b) => a.sequence - b.sequence);
   }
+  private pendingCount(): Promise<number> {
+    return this.db.metadata.where('key').startsWith(outboxPrefix).count();
+  }
   async authorize(user: User): Promise<void> {
     requireLocal(user && typeof user.id === 'string' && ['owner', 'manager', 'cashier', 'waiter', 'kitchen', 'storekeeper', 'accountant'].includes(user.role), 'Sign in to your POS first.', 401, 'UNAUTHENTICATED');
     await this.db.metadata.put({key: sessionKey, value: structuredClone(user)});
@@ -235,7 +238,7 @@ export class CloudOfflineReplica {
     try {
       const applied = await this.db.transaction('rw', this.db.records, this.db.metadata, async () => {
         if (user) await this.authorize(user);
-        if ((await this.pending()).length) return false;
+        if (await this.pendingCount()) return false;
         const previous = (await this.db.metadata.get(stateKey))?.value as ReplicaState | undefined;
         if (previous && state.cloudVersion < previous.cloudVersion) return false;
         const timestamp = now();
@@ -263,7 +266,7 @@ export class CloudOfflineReplica {
   async status(): Promise<CloudOfflineStatus> {
     return this.db.transaction('r', this.db.metadata, async () => {
       const state = (await this.db.metadata.get(stateKey))?.value as ReplicaState | undefined;
-      return {ready: Boolean(state), pending: (await this.pending()).length, lastError: state?.lastError ?? '', lastSync: state?.lastSync ?? null, deviceId: (await this.db.metadata.get('deviceId'))?.value as string ?? null, warnings: state?.warnings ?? []};
+      return {ready: Boolean(state), pending: await this.pendingCount(), lastError: state?.lastError ?? '', lastSync: state?.lastSync ?? null, deviceId: (await this.db.metadata.get('deviceId'))?.value as string ?? null, warnings: state?.warnings ?? []};
     });
   }
   /** Cache a verified immutable photo fetched separately from the business
@@ -435,7 +438,7 @@ export class CloudOfflineReplica {
         break; // A dependent payment must never overtake its order.
       }
     }
-    return {pending: (await this.pending()).length, synced, failed: lastError ? 1 : 0, lastError, ...failure};
+    return {pending: await this.pendingCount(), synced, failed: lastError ? 1 : 0, lastError, ...failure};
   }
 }
 
